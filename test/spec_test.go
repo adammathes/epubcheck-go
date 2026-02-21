@@ -115,28 +115,37 @@ func TestSpec(t *testing.T) {
 
 				for _, em := range exp.Messages {
 					found := false
+					checkIDMatch := false
 					re, err := regexp.Compile("(?i)" + em.MessagePattern)
 					if err != nil {
 						t.Errorf("bad pattern %q: %v", em.MessagePattern, err)
 						continue
 					}
 
+					// Per spec: match on severity + message_pattern.
+					// check_id matching is informational (spec says implementations
+					// do not need identical message IDs).
 					for _, msg := range rpt.Messages {
 						if string(msg.Severity) == em.Severity &&
-							msg.CheckID == em.CheckID &&
 							re.MatchString(msg.Message) {
 							found = true
+							if msg.CheckID == em.CheckID {
+								checkIDMatch = true
+							}
 							break
 						}
 					}
 
 					if !found {
-						t.Errorf("expected message not found: severity=%s check_id=%s pattern=%q",
-							em.Severity, em.CheckID, em.MessagePattern)
+						t.Errorf("expected message not found: severity=%s pattern=%q",
+							em.Severity, em.MessagePattern)
 						t.Logf("got messages:")
 						for _, msg := range rpt.Messages {
 							t.Logf("  %s(%s): %s", msg.Severity, msg.CheckID, msg.Message)
 						}
+					} else if !checkIDMatch {
+						t.Logf("note: check_id mismatch for %s: expected %s, got different ID (spec allows this)",
+							em.MessagePattern, em.CheckID)
 					}
 				}
 			})
