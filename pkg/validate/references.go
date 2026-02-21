@@ -34,6 +34,9 @@ func checkReferences(ep *epub.EPUB, r *report.Report, opts Options) {
 	// RSC-013: manifest hrefs must not be absolute paths
 	checkManifestNoAbsolutePath(ep, r)
 
+	// RSC-002: every file in the container should be in the manifest
+	checkFilesInManifest(ep, r)
+
 	// RSC-006: resources referenced in content must be in manifest
 	checkResourcesInManifest(ep, r)
 
@@ -289,6 +292,22 @@ func checkNavigation(ep *epub.EPUB, r *report.Report) {
 			checkNavLinkResolves(ep, link.href, fullPath, "NAV-007", r)
 		}
 	}
+
+	// NAV-009: hidden attribute on nav elements
+	if navInfo.hasHiddenNav {
+		r.AddWithLocation(report.Warning, "NAV-009",
+			"The 'hidden' attribute on nav elements may affect reading system behavior",
+			fullPath)
+	}
+
+	// NAV-010: landmark entries should use valid epub:type values
+	for _, t := range navInfo.landmarkTypes {
+		if !validEpubTypes[t] && !strings.Contains(t, ":") {
+			r.AddWithLocation(report.Warning, "NAV-010",
+				fmt.Sprintf("Landmark nav entry uses unknown epub:type value '%s'", t),
+				fullPath)
+		}
+	}
 }
 
 type navLink struct {
@@ -300,8 +319,11 @@ type navDocInfo struct {
 	tocLinks      []navLink
 	landmarkLinks []navLink
 	pageListLinks []navLink
+	landmarkTypes []string
 	tocCount      int
 	tocHasOl      bool
+	hasHiddenNav  bool
+	hasLandmarks  bool
 }
 
 // NAV-011: nav document must be well-formed XHTML
@@ -352,12 +374,16 @@ func parseNavDocument(ep *epub.EPUB, data []byte, navPath string) navDocInfo {
 							info.tocCount++
 						} else if containsToken(attr.Value, "landmarks") {
 							currentNavType = "landmarks"
+							info.hasLandmarks = true
 						} else if containsToken(attr.Value, "page-list") {
 							currentNavType = "page-list"
 						} else {
 							currentNavType = ""
 						}
 						inNav = true
+					}
+					if attr.Name.Local == "hidden" {
+						info.hasHiddenNav = true
 					}
 				}
 			}
@@ -371,6 +397,12 @@ func parseNavDocument(ep *epub.EPUB, data []byte, navPath string) navDocInfo {
 				for _, attr := range t.Attr {
 					if attr.Name.Local == "href" {
 						currentHref = attr.Value
+					}
+					// Capture epub:type on landmark anchors
+					if currentNavType == "landmarks" && attr.Name.Local == "type" {
+						for _, val := range strings.Fields(attr.Value) {
+							info.landmarkTypes = append(info.landmarkTypes, val)
+						}
 					}
 				}
 			}
@@ -494,6 +526,44 @@ func checkManifestNoAbsolutePath(ep *epub.EPUB, r *report.Report) {
 		if strings.HasPrefix(item.Href, "/") {
 			r.Add(report.Error, "RSC-013",
 				fmt.Sprintf("Referenced resource '%s' leaks outside the container: absolute paths not allowed", item.Href))
+		}
+	}
+}
+
+// RSC-002: every content file in the container should be listed in the manifest
+func checkFilesInManifest(ep *epub.EPUB, r *report.Report) {
+	manifestPaths := make(map[string]bool)
+	for _, item := range ep.Package.Manifest {
+		if item.Href != "\x00MISSING" {
+			manifestPaths[ep.ResolveHref(item.Href)] = true
+		}
+	}
+
+	// Files that are expected to be outside the manifest
+	ignorePaths := map[string]bool{
+		"mimetype":                  true,
+		"META-INF/container.xml":    true,
+		"META-INF/encryption.xml":   true,
+		"META-INF/manifest.xml":     true,
+		"META-INF/metadata.xml":     true,
+		"META-INF/rights.xml":       true,
+		"META-INF/signatures.xml":   true,
+	}
+
+	for name := range ep.Files {
+		if ignorePaths[name] {
+			continue
+		}
+		if strings.HasPrefix(name, "META-INF/") {
+			continue
+		}
+		// Skip the OPF file itself
+		if name == ep.RootfilePath {
+			continue
+		}
+		if !manifestPaths[name] {
+			r.Add(report.Warning, "RSC-002",
+				fmt.Sprintf("File '%s' in container is not declared in the OPF manifest", name))
 		}
 	}
 }

@@ -3,7 +3,9 @@ package validate
 import (
 	"archive/zip"
 	"encoding/binary"
+	"encoding/xml"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -65,6 +67,18 @@ func checkOCF(ep *epub.EPUB, r *report.Report, opts Options) bool {
 
 	// OCF-012: rootfile media-type must be correct
 	checkRootfileMediaType(ep, r)
+
+	// OCF-013: encryption.xml must be well-formed XML if present
+	checkEncryptionXMLWellFormed(ep, r)
+
+	// OCF-014: container.xml version must be 1.0
+	checkContainerVersion(ep, r)
+
+	// OCF-015: filenames must not contain restricted characters
+	checkFilenameValidChars(ep, r)
+
+	// OCF-016: file paths should not exceed 65535 bytes
+	checkFilenameLength(ep, r)
 
 	return fatal
 }
@@ -266,6 +280,87 @@ func checkRootfileMediaType(ep *epub.EPUB, r *report.Report) {
 	if len(ep.AllRootfiles) > 0 && !hasCorrectMediaType {
 		r.Add(report.Error, "OCF-012",
 			"No rootfile tag with media type 'application/oebps-package+xml' found")
+	}
+}
+
+// OCF-013: encryption.xml must be well-formed XML if present
+func checkEncryptionXMLWellFormed(ep *epub.EPUB, r *report.Report) {
+	_, exists := ep.Files["META-INF/encryption.xml"]
+	if !exists {
+		return
+	}
+	data, err := ep.ReadFile("META-INF/encryption.xml")
+	if err != nil {
+		return
+	}
+	decoder := xml.NewDecoder(strings.NewReader(string(data)))
+	for {
+		_, err := decoder.Token()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			r.Add(report.Fatal, "OCF-013",
+				fmt.Sprintf("META-INF/encryption.xml is not well-formed: element must be followed by the '>' character (%s)", err.Error()))
+			r.Add(report.Error, "OCF-013",
+				"Encryption XML validation aborted due to malformed XML")
+			return
+		}
+	}
+}
+
+// OCF-014: container.xml version attribute must be 1.0
+func checkContainerVersion(ep *epub.EPUB, r *report.Report) {
+	if ep.ContainerData == nil {
+		return
+	}
+	decoder := xml.NewDecoder(strings.NewReader(string(ep.ContainerData)))
+	for {
+		tok, err := decoder.Token()
+		if err != nil {
+			break
+		}
+		se, ok := tok.(xml.StartElement)
+		if !ok {
+			continue
+		}
+		if se.Name.Local == "container" {
+			for _, attr := range se.Attr {
+				if attr.Name.Local == "version" && attr.Value != "1.0" {
+					r.Add(report.Error, "OCF-014",
+						fmt.Sprintf("The container.xml version attribute value '%s' must be equal to '1.0'", attr.Value))
+				}
+			}
+			return
+		}
+	}
+}
+
+// OCF-015: filenames must not contain restricted characters
+func checkFilenameValidChars(ep *epub.EPUB, r *report.Report) {
+	// Characters restricted in ZIP/EPUB filenames
+	restricted := []rune{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31}
+
+	for _, f := range ep.ZipFile.File {
+		for _, c := range f.Name {
+			for _, r2 := range restricted {
+				if c == r2 {
+					r.Add(report.Error, "OCF-015",
+						fmt.Sprintf("File '%s' could not be found in the container: filename contains restricted characters", f.Name))
+					break
+				}
+			}
+		}
+	}
+}
+
+// OCF-016: file paths should not exceed 65535 bytes
+func checkFilenameLength(ep *epub.EPUB, r *report.Report) {
+	for _, f := range ep.ZipFile.File {
+		if len(f.Name) > 65535 {
+			r.Add(report.Warning, "OCF-016",
+				fmt.Sprintf("File path '%s...' exceeds recommended maximum of 65535 bytes", f.Name[:50]))
+		}
 	}
 }
 

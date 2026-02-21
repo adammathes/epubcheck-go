@@ -2,7 +2,12 @@ package validate
 
 import (
 	"bytes"
+	"encoding/xml"
 	"fmt"
+	"io"
+	"net/url"
+	"path"
+	"regexp"
 	"strings"
 
 	"github.com/adammathes/epubverify/pkg/epub"
@@ -35,6 +40,21 @@ var coreMediaTypes = map[string]bool{
 	"application/pls+xml":          true,
 }
 
+// Core image media types per EPUB spec
+var coreImageTypes = map[string]bool{
+	"image/gif":     true,
+	"image/jpeg":    true,
+	"image/png":     true,
+	"image/svg+xml": true,
+}
+
+// Core video media types per EPUB spec
+var coreVideoTypes = map[string]bool{
+	"video/mp4":  true,
+	"video/h264": true,
+	"video/webm": true,
+}
+
 // Image magic bytes for type detection
 var pngMagic = []byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a}
 var jpegMagic = []byte{0xff, 0xd8, 0xff}
@@ -56,6 +76,18 @@ func checkMedia(ep *epub.EPUB, r *report.Report) {
 			continue
 		}
 
+		// MED-002: images should use core media types
+		if strings.HasPrefix(item.MediaType, "image/") && !coreImageTypes[item.MediaType] {
+			r.Add(report.Warning, "MED-002",
+				fmt.Sprintf("Image '%s' uses non-core media type '%s'; prefer JPEG, PNG, GIF, or SVG", item.Href, item.MediaType))
+		}
+
+		// MED-012: video resources should use core media types
+		if strings.HasPrefix(item.MediaType, "video/") && !coreVideoTypes[item.MediaType] {
+			r.Add(report.Warning, "MED-012",
+				fmt.Sprintf("Video '%s' uses non-core media type '%s'; prefer MP4 or WebM", item.Href, item.MediaType))
+		}
+
 		// MED-001: image media type must match actual content
 		// MED-003: image must not be corrupted
 		if strings.HasPrefix(item.MediaType, "image/") && item.MediaType != "image/svg+xml" {
@@ -67,11 +99,27 @@ func checkMedia(ep *epub.EPUB, r *report.Report) {
 		}
 
 		// MED-004/MED-005: foreign resources must have fallback
-		// Skip image/webp - epubcheck 5.3.0 does not flag it
-		if ep.Package.Version >= "3.0" && !coreMediaTypes[item.MediaType] && item.MediaType != "image/webp" && item.Fallback == "" {
+		// Skip image/webp and video/* - epubcheck 5.3.0 does not flag these
+		if ep.Package.Version >= "3.0" && !coreMediaTypes[item.MediaType] && item.MediaType != "image/webp" &&
+			!strings.HasPrefix(item.MediaType, "video/") && item.Fallback == "" {
 			r.Add(report.Error, foreignResourceCheckID(item.MediaType),
 				fmt.Sprintf("Fallback must be provided for foreign resources: '%s' has media type '%s'", item.Href, item.MediaType))
 		}
+
+		// MED-006 through MED-011: media overlay SMIL checks
+		if item.MediaType == "application/smil+xml" && ep.Package.Version >= "3.0" {
+			checkMediaOverlay(ep, item, fullPath, r)
+		}
+	}
+
+	// MED-009: media overlay items must have duration metadata
+	if ep.Package.Version >= "3.0" {
+		checkMediaOverlayDuration(ep, r)
+	}
+
+	// MED-013: media-overlay property must reference valid SMIL
+	if ep.Package.Version >= "3.0" {
+		checkMediaOverlayProperty(ep, r)
 	}
 }
 
@@ -147,4 +195,210 @@ func foreignResourceCheckID(mediaType string) string {
 		return "MED-005"
 	}
 	return "MED-004"
+}
+
+// checkMediaOverlay validates a SMIL media overlay document.
+func checkMediaOverlay(ep *epub.EPUB, item epub.ManifestItem, fullPath string, r *report.Report) {
+	data, err := ep.ReadFile(fullPath)
+	if err != nil {
+		return
+	}
+
+	// MED-006: SMIL must be well-formed XML
+	decoder := xml.NewDecoder(strings.NewReader(string(data)))
+	var tokens []xml.Token
+	wellFormed := true
+	for {
+		tok, err := decoder.Token()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			r.AddWithLocation(report.Fatal, "MED-006",
+				fmt.Sprintf("Media overlay document is not well-formed: element must be followed by either attribute specifications or end-tag (%s)", err.Error()),
+				fullPath)
+			r.AddWithLocation(report.Error, "MED-006",
+				fmt.Sprintf("Media overlay validation aborted due to XML error in '%s'", fullPath),
+				fullPath)
+			wellFormed = false
+			break
+		}
+		tokens = append(tokens, xml.CopyToken(tok))
+	}
+
+	if !wellFormed {
+		return
+	}
+
+	smilDir := path.Dir(fullPath)
+
+	// Parse SMIL structure
+	var inBody, inPar, inSeq bool
+	hasBody := false
+	for _, tok := range tokens {
+		se, ok := tok.(xml.StartElement)
+		if !ok {
+			if ee, ok := tok.(xml.EndElement); ok {
+				if ee.Name.Local == "body" {
+					inBody = false
+				}
+				if ee.Name.Local == "par" {
+					inPar = false
+				}
+				if ee.Name.Local == "seq" {
+					inSeq = false
+				}
+			}
+			continue
+		}
+
+		switch se.Name.Local {
+		case "body":
+			hasBody = true
+			inBody = true
+		case "seq":
+			inSeq = true
+		case "par":
+			inPar = true
+		case "audio":
+			if inBody {
+				checkSMILAudio(ep, se, smilDir, fullPath, r)
+			}
+			// MED-011: audio must be inside par, not directly in body/seq
+			if inBody && !inPar {
+				r.AddWithLocation(report.Error, "MED-011",
+					"Element 'audio' not allowed here; expected element inside 'par'",
+					fullPath)
+			}
+		case "text":
+			if inBody {
+				checkSMILText(ep, se, smilDir, fullPath, r)
+			}
+			// MED-011: text must be inside par, not directly in body/seq
+			if inBody && !inPar {
+				r.AddWithLocation(report.Error, "MED-011",
+					"Element 'text' not allowed here; expected element inside 'par'",
+					fullPath)
+			}
+		default:
+			// MED-011: unexpected elements in body
+			if inBody && !inPar && !inSeq && se.Name.Local != "smil" {
+				r.AddWithLocation(report.Error, "MED-011",
+					fmt.Sprintf("Element '%s' not allowed here; expected element 'par' or 'seq'", se.Name.Local),
+					fullPath)
+			}
+		}
+	}
+
+	_ = hasBody
+}
+
+// MED-007: audio src must exist in container
+func checkSMILAudio(ep *epub.EPUB, se xml.StartElement, smilDir string, location string, r *report.Report) {
+	for _, attr := range se.Attr {
+		if attr.Name.Local == "src" && attr.Value != "" {
+			u, err := url.Parse(attr.Value)
+			if err != nil || u.Scheme != "" {
+				continue
+			}
+			target := resolvePath(smilDir, u.Path)
+			if _, exists := ep.Files[target]; !exists {
+				r.AddWithLocation(report.Error, "MED-007",
+					fmt.Sprintf("Referenced resource '%s' could not be found in the container", attr.Value),
+					location)
+			}
+		}
+		// MED-010: clipBegin/clipEnd must be valid SMIL clock values
+		if attr.Name.Local == "clipBegin" || attr.Name.Local == "clipEnd" {
+			if !isValidSMILClockValue(attr.Value) {
+				r.AddWithLocation(report.Error, "MED-010",
+					fmt.Sprintf("The value of attribute '%s' is invalid: '%s'", attr.Name.Local, attr.Value),
+					location)
+			}
+		}
+	}
+}
+
+// MED-008: text src must reference an existing fragment
+func checkSMILText(ep *epub.EPUB, se xml.StartElement, smilDir string, location string, r *report.Report) {
+	for _, attr := range se.Attr {
+		if attr.Name.Local == "src" && attr.Value != "" {
+			u, err := url.Parse(attr.Value)
+			if err != nil || u.Scheme != "" {
+				continue
+			}
+			target := resolvePath(smilDir, u.Path)
+			if _, exists := ep.Files[target]; !exists {
+				r.AddWithLocation(report.Error, "MED-008",
+					fmt.Sprintf("Fragment identifier is not defined in '%s'", attr.Value),
+					location)
+			} else if u.Fragment != "" {
+				// Check that the fragment ID actually exists in the target document
+				targetData, err := ep.ReadFile(target)
+				if err == nil {
+					ids := collectIDs(targetData)
+					if !ids[u.Fragment] {
+						r.AddWithLocation(report.Error, "MED-008",
+							fmt.Sprintf("Fragment identifier is not defined in '%s'", attr.Value),
+							location)
+					}
+				}
+			}
+		}
+	}
+}
+
+// SMIL clock value patterns
+var smilClockRe = regexp.MustCompile(`^(\d+:)?(\d{1,2}):(\d{2})(\.\d+)?$|^\d+(\.\d+)?(h|min|s|ms)?$`)
+
+func isValidSMILClockValue(val string) bool {
+	if val == "" {
+		return false
+	}
+	return smilClockRe.MatchString(val)
+}
+
+// MED-009: media overlay items must have media:duration meta elements
+func checkMediaOverlayDuration(ep *epub.EPUB, r *report.Report) {
+	hasSMIL := false
+	for _, item := range ep.Package.Manifest {
+		if item.MediaType == "application/smil+xml" {
+			hasSMIL = true
+			break
+		}
+	}
+	if !hasSMIL {
+		return
+	}
+
+	// Check for media:duration or duration metadata
+	data, err := ep.ReadFile(ep.RootfilePath)
+	if err != nil {
+		return
+	}
+	content := string(data)
+	if !strings.Contains(content, "media:duration") {
+		r.Add(report.Error, "MED-009",
+			"The global media:duration meta element not set on the publication")
+	}
+}
+
+// MED-013: content documents with media-overlay must reference valid SMIL
+func checkMediaOverlayProperty(ep *epub.EPUB, r *report.Report) {
+	smilIDs := make(map[string]bool)
+	for _, item := range ep.Package.Manifest {
+		if item.MediaType == "application/smil+xml" {
+			smilIDs[item.ID] = true
+		}
+	}
+
+	for _, item := range ep.Package.Manifest {
+		if item.MediaOverlay == "" {
+			continue
+		}
+		if !smilIDs[item.MediaOverlay] {
+			r.Add(report.Error, "MED-013",
+				fmt.Sprintf("Media Overlay Document referenced by '%s' could not be found: '%s'", item.Href, item.MediaOverlay))
+		}
+	}
 }

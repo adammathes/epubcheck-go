@@ -11,6 +11,10 @@ type Options struct {
 	// even when the reference epubcheck tool doesn't flag them.
 	// This includes OCF-005 (compressed mimetype) and RSC-002 (file not in manifest).
 	Strict bool
+
+	// Accessibility enables accessibility metadata and best-practice checks (ACC-*).
+	// These are not flagged by epubcheck without --profile and are off by default.
+	Accessibility bool
 }
 
 // Validate runs all validation checks on an EPUB file and returns a report.
@@ -62,6 +66,11 @@ func ValidateWithOptions(path string, opts Options) (*report.Report, error) {
 
 	// Phase 10: EPUB 2 specific checks
 	checkEPUB2(ep, r)
+
+	// Phase 11: Accessibility checks (opt-in, not flagged by epubcheck without --profile)
+	if opts.Accessibility {
+		checkAccessibility(ep, r)
+	}
 
 	return r, nil
 }
