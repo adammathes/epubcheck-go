@@ -15,7 +15,7 @@ A Go-based EPUB validator that checks EPUB files for compliance with standards.
 ```bash
 git clone https://github.com/adammathes/epubverify-go.git
 cd epubverify-go
-go build -o epubverify .
+go build -o epubverify ./cmd/epubverify/
 ```
 
 The compiled binary will be created as `epubverify` in the current directory.
@@ -34,38 +34,70 @@ The compiled binary will be created as `epubverify` in the current directory.
 ./epubverify path/to/book.epub
 ```
 
-This will validate the EPUB file and display the results.
+### JSON output
+
+```bash
+./epubverify path/to/book.epub --json -          # to stdout
+./epubverify path/to/book.epub --json out.json   # to file
+```
+
+### Exit codes
+
+| Code | Meaning |
+|------|---------|
+| 0 | Valid — no errors |
+| 1 | Invalid — errors found |
+| 2 | Fatal error or invalid arguments |
 
 ## Testing
 
-### Run all tests
+### Unit tests
 
 ```bash
 go test ./pkg/...
+# or
+make test
 ```
 
-### Run tests with verbose output
+### Spec compliance tests
+
+Spec tests run the validator against the full [epubverify-spec](../epubverify-spec) fixture suite and compare results against curated expected output.
 
 ```bash
-go test -v ./pkg/...
+# Point at the spec directory
+export EPUBCHECK_SPEC_DIR=/path/to/epubverify-spec
+
+# Build fixtures first (requires epubcheck installed)
+cd $EPUBCHECK_SPEC_DIR && make build
+
+# Run spec tests
+make spec-test
 ```
 
-### Run specific package tests
+### All make targets
 
-```bash
-# Test the epub package
-go test ./pkg/epub
-
-# Test the validate package
-go test ./pkg/validate
+```
+make build       Build the binary
+make test        Run unit tests (pkg/...)
+make spec-test   Run spec compliance tests (requires EPUBCHECK_SPEC_DIR)
+make compare     Run full parity comparison via spec scripts
+make bench       Benchmark epubverify vs reference epubcheck
+make clean       Remove built binary
 ```
 
 ## Project Structure
 
-- `pkg/epub/` - EPUB file parsing and handling
-- `pkg/validate/` - EPUB validation logic
-- `pkg/report/` - Report generation and formatting
-- `main.go` - CLI entry point
+```
+epubverify-go/
+├── cmd/epubverify/    # CLI entry point
+│   └── main.go
+├── pkg/
+│   ├── epub/          # EPUB file parsing and zip handling
+│   ├── validate/      # Validation logic (OCF, OPF, HTML, CSS, nav, etc.)
+│   └── report/        # Report generation (text and JSON output)
+└── test/
+    └── spec_test.go   # Spec compliance tests against epubverify-spec
+```
 
 ## License
 
