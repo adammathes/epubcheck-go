@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>epubverify</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  background: #f5f5f5;
+  color: #333;
+  line-height: 1.5;
+  padding: 2rem 1rem;
+}
+
+.container {
+  max-width: 720px;
+  margin: 0 auto;
+}
+
+h1 {
+  font-size: 1.5rem;
+  margin-bottom: 0.25rem;
+}
+
+.subtitle {
+  color: #666;
+  font-size: 0.9rem;
+  margin-bottom: 1.5rem;
+}
+
+/* Drop zone */
+.drop-zone {
+  border: 2px dashed #aaa;
+  border-radius: 8px;
+  padding: 3rem 1rem;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+  background: #fff;
+  margin-bottom: 1.5rem;
+}
+.drop-zone:hover, .drop-zone.dragover {
+  border-color: #4a90d9;
+  background: #eef4fb;
+}
+.drop-zone p { font-size: 1rem; color: #555; }
+.drop-zone .hint { font-size: 0.8rem; color: #999; margin-top: 0.5rem; }
+.drop-zone input[type="file"] { display: none; }
+
+/* Status bar */
+#status {
+  display: none;
+  padding: 0.75rem 1rem;
+  border-radius: 6px;
+  margin-bottom: 1rem;
+  font-weight: 500;
+  font-size: 0.9rem;
+}
+#status.loading { display: block; background: #fff3cd; color: #856404; }
+#status.valid   { display: block; background: #d4edda; color: #155724; }
+#status.invalid { display: block; background: #f8d7da; color: #721c24; }
+
+/* Summary counts */
+.summary {
+  display: flex;
+  gap: 1rem;
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
+}
+.summary .badge {
+  padding: 0.4rem 0.8rem;
+  border-radius: 4px;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+.badge.fatal   { background: #721c24; color: #fff; }
+.badge.error   { background: #c0392b; color: #fff; }
+.badge.warning { background: #f39c12; color: #fff; }
+.badge.info    { background: #3498db; color: #fff; }
+
+/* Messages table */
+#results { display: none; }
+.messages-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: #fff;
+  border-radius: 6px;
+  overflow: hidden;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+  font-size: 0.85rem;
+}
+.messages-table th {
+  background: #f0f0f0;
+  text-align: left;
+  padding: 0.6rem 0.75rem;
+  font-weight: 600;
+  border-bottom: 1px solid #ddd;
+}
+.messages-table td {
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid #eee;
+  vertical-align: top;
+}
+.messages-table tr:last-child td { border-bottom: none; }
+.messages-table .sev { font-weight: 600; white-space: nowrap; width: 70px; }
+.messages-table .sev-FATAL   { color: #721c24; }
+.messages-table .sev-ERROR   { color: #c0392b; }
+.messages-table .sev-WARNING { color: #e67e22; }
+.messages-table .sev-INFO    { color: #2980b9; }
+.messages-table .sev-USAGE   { color: #7f8c8d; }
+.messages-table .check-id { font-family: monospace; white-space: nowrap; width: 80px; }
+.messages-table .location { font-family: monospace; font-size: 0.8rem; color: #666; white-space: nowrap; }
+.no-messages { padding: 1.5rem; text-align: center; color: #666; background: #fff; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>epubverify</h1>
+  <p class="subtitle">EPUB validation running entirely in your browser via WebAssembly. No files are uploaded.</p>
+
+  <div class="drop-zone" id="dropZone">
+    <p>Drop an .epub file here, or click to browse</p>
+    <p class="hint">File stays on your machine &mdash; nothing is sent to a server.</p>
+    <input type="file" id="fileInput" accept=".epub">
+  </div>
+
+  <div id="status"></div>
+
+  <div id="results">
+    <div class="summary" id="summary"></div>
+    <div id="messagesContainer"></div>
+  </div>
+</div>
+
+<script src="wasm_exec.js"></script>
+<script>
+(async function() {
+  // Load the Go WASM runtime.
+  const go = new Go();
+  const result = await WebAssembly.instantiateStreaming(fetch("epubverify.wasm"), go.importObject);
+  go.run(result.instance);
+
+  const dropZone = document.getElementById("dropZone");
+  const fileInput = document.getElementById("fileInput");
+  const statusEl = document.getElementById("status");
+  const resultsEl = document.getElementById("results");
+  const summaryEl = document.getElementById("summary");
+  const messagesEl = document.getElementById("messagesContainer");
+
+  // Click to open file picker.
+  dropZone.addEventListener("click", () => fileInput.click());
+  fileInput.addEventListener("change", () => {
+    if (fileInput.files.length > 0) handleFile(fileInput.files[0]);
+  });
+
+  // Drag and drop.
+  dropZone.addEventListener("dragover", (e) => { e.preventDefault(); dropZone.classList.add("dragover"); });
+  dropZone.addEventListener("dragleave", () => dropZone.classList.remove("dragover"));
+  dropZone.addEventListener("drop", (e) => {
+    e.preventDefault();
+    dropZone.classList.remove("dragover");
+    if (e.dataTransfer.files.length > 0) handleFile(e.dataTransfer.files[0]);
+  });
+
+  async function handleFile(file) {
+    // Reset.
+    statusEl.className = "loading";
+    statusEl.textContent = "Validating " + file.name + " (" + formatSize(file.size) + ")...";
+    statusEl.style.display = "block";
+    resultsEl.style.display = "none";
+    summaryEl.innerHTML = "";
+    messagesEl.innerHTML = "";
+
+    // Read file into Uint8Array.
+    const buf = await file.arrayBuffer();
+    const data = new Uint8Array(buf);
+
+    // Call into WASM.
+    let jsonStr;
+    try {
+      jsonStr = validateEPUB(data);
+    } catch (err) {
+      statusEl.className = "invalid";
+      statusEl.textContent = "WASM error: " + err.message;
+      return;
+    }
+
+    let report;
+    try {
+      report = JSON.parse(jsonStr);
+    } catch (err) {
+      statusEl.className = "invalid";
+      statusEl.textContent = "Failed to parse result: " + err.message;
+      return;
+    }
+
+    if (report.error) {
+      statusEl.className = "invalid";
+      statusEl.textContent = report.error;
+      return;
+    }
+
+    // Display results.
+    if (report.valid) {
+      statusEl.className = "valid";
+      statusEl.textContent = file.name + " is valid.";
+    } else {
+      statusEl.className = "invalid";
+      statusEl.textContent = file.name + " has issues.";
+    }
+
+    // Summary badges.
+    const counts = [
+      { label: "Fatal", count: report.fatal_count, cls: "fatal" },
+      { label: "Errors", count: report.error_count, cls: "error" },
+      { label: "Warnings", count: report.warning_count, cls: "warning" },
+    ];
+    for (const c of counts) {
+      if (c.count > 0) {
+        const span = document.createElement("span");
+        span.className = "badge " + c.cls;
+        span.textContent = c.count + " " + c.label;
+        summaryEl.appendChild(span);
+      }
+    }
+
+    // Messages table.
+    if (report.messages.length === 0) {
+      messagesEl.innerHTML = '<div class="no-messages">No errors or warnings detected.</div>';
+    } else {
+      const table = document.createElement("table");
+      table.className = "messages-table";
+      const thead = document.createElement("thead");
+      thead.innerHTML = "<tr><th>Severity</th><th>Check</th><th>Message</th><th>Location</th></tr>";
+      table.appendChild(thead);
+      const tbody = document.createElement("tbody");
+      for (const m of report.messages) {
+        const tr = document.createElement("tr");
+        tr.innerHTML =
+          '<td class="sev sev-' + esc(m.severity) + '">' + esc(m.severity) + '</td>' +
+          '<td class="check-id">' + esc(m.check_id) + '</td>' +
+          '<td>' + esc(m.message) + '</td>' +
+          '<td class="location">' + esc(m.location || "") + '</td>';
+        tbody.appendChild(tr);
+      }
+      table.appendChild(tbody);
+      messagesEl.appendChild(table);
+    }
+
+    resultsEl.style.display = "block";
+  }
+
+  function esc(s) {
+    const d = document.createElement("div");
+    d.textContent = s;
+    return d.innerHTML;
+  }
+
+  function formatSize(bytes) {
+    if (bytes < 1024) return bytes + " B";
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
+    return (bytes / (1024 * 1024)).toFixed(1) + " MB";
+  }
+})();
+</script>
+</body>
+</html>

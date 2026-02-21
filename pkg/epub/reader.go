@@ -2,6 +2,7 @@ package epub
 
 import (
 	"archive/zip"
+	"bytes"
 	"encoding/xml"
 	"fmt"
 	"io"
@@ -21,6 +22,26 @@ func Open(filepath string) (*EPUB, error) {
 		Path:    filepath,
 		ZipFile: zr,
 		Files:   make(map[string]*zip.File),
+	}
+
+	for _, f := range zr.File {
+		ep.Files[f.Name] = f
+	}
+
+	return ep, nil
+}
+
+// OpenFromBytes opens an EPUB from raw bytes (e.g. from a browser file upload).
+// The caller must call Close() when done.
+func OpenFromBytes(data []byte) (*EPUB, error) {
+	zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		return nil, fmt.Errorf("opening epub from bytes: %w", err)
+	}
+
+	ep := &EPUB{
+		Path:  "(bytes)",
+		Files: make(map[string]*zip.File),
 	}
 
 	for _, f := range zr.File {

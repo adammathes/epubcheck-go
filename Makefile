@@ -1,7 +1,7 @@
 SPEC_DIR ?= $(HOME)/epubcheck-spec
 EPUBCHECK_JAR ?= $(HOME)/tools/epubcheck-5.3.0/epubcheck.jar
 
-.PHONY: build test spec-test compare bench clean
+.PHONY: build test spec-test compare bench clean wasm serve
 
 build:                       ## Build the binary
 	go build -o epubverify .
@@ -19,8 +19,21 @@ bench: build                 ## Benchmark vs reference epubcheck
 	@echo "=== epubverify ===" && time ./epubverify $(SPEC_DIR)/fixtures/epub/valid/minimal-epub3.epub --json /dev/null 2>/dev/null
 	@echo "=== reference java ===" && time java -jar $(EPUBCHECK_JAR) $(SPEC_DIR)/fixtures/epub/valid/minimal-epub3.epub --json /dev/null 2>/dev/null
 
+wasm:                        ## Build WASM binary and copy support files to web/
+	GOOS=js GOARCH=wasm go build -o web/epubverify.wasm ./cmd/wasm
+	@# wasm_exec.js moved from misc/wasm/ to lib/wasm/ in Go 1.24
+	@if [ -f "$$(go env GOROOT)/lib/wasm/wasm_exec.js" ]; then \
+		cp "$$(go env GOROOT)/lib/wasm/wasm_exec.js" web/wasm_exec.js; \
+	else \
+		cp "$$(go env GOROOT)/misc/wasm/wasm_exec.js" web/wasm_exec.js; \
+	fi
+
+serve: wasm                  ## Build WASM and start a local dev server on :8080
+	@echo "Serving web/ at http://localhost:8080"
+	@cd web && python3 -m http.server 8080
+
 clean:
-	rm -f epubverify
+	rm -f epubverify web/epubverify.wasm web/wasm_exec.js
 
 help:                        ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?##' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-15s %s\n", $$1, $$2}'
