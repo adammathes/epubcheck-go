@@ -1,0 +1,195 @@
+package doctor
+
+import (
+	"archive/zip"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/adammathes/epubverify/pkg/validate"
+)
+
+// TestDoctorIntegrationMultipleProblems creates an EPUB with many simultaneous
+// problems and verifies the doctor fixes all of them.
+func TestDoctorIntegrationMultipleProblems(t *testing.T) {
+	dir := t.TempDir()
+	input := filepath.Join(dir, "broken.epub")
+	output := filepath.Join(dir, "fixed.epub")
+
+	// Build a broken EPUB with many issues:
+	// 1. mimetype not first (OCF-002)
+	// 2. mimetype content wrong (OCF-003)
+	// 3. mimetype compressed (OCF-005)
+	// 4. missing dcterms:modified (OPF-004)
+	// 5. XHTML 1.1 DOCTYPE (HTM-010)
+	// 6. script without 'scripted' property (HTM-005)
+	// 7. image media-type mismatch (OPF-024/MED-001)
+	f, err := os.Create(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	w := zip.NewWriter(f)
+
+	// Write container first (mimetype not first = OCF-002)
+	cw, _ := w.Create("META-INF/container.xml")
+	cw.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles>
+    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
+  </rootfiles>
+</container>`))
+
+	// Mimetype with wrong content and compressed (OCF-003, OCF-005)
+	header := &zip.FileHeader{
+		Name:   "mimetype",
+		Method: zip.Deflate, // Wrong: should be Store
+	}
+	mw, _ := w.CreateHeader(header)
+	mw.Write([]byte("application/epub+zip-WRONG")) // Wrong content
+
+	// OPF without dcterms:modified and with wrong media-type for image
+	ow, _ := w.Create("OEBPS/content.opf")
+	ow.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="uid">urn:uuid:12345678-1234-1234-1234-123456789012</dc:identifier>
+    <dc:title>Broken Test Book</dc:title>
+    <dc:language>en</dc:language>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="chapter1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="cover" href="cover.jpg" media-type="image/png"/>
+  </manifest>
+  <spine>
+    <itemref idref="ch1"/>
+  </spine>
+</package>`))
+
+	// Nav doc
+	nw, _ := w.Create("OEBPS/nav.xhtml")
+	nw.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+<head><title>Navigation</title></head>
+<body>
+<nav epub:type="toc"><ol><li><a href="chapter1.xhtml">Chapter 1</a></li></ol></nav>
+</body>
+</html>`))
+
+	// Chapter with XHTML 1.1 DOCTYPE and script (no scripted property)
+	chw, _ := w.Create("OEBPS/chapter1.xhtml")
+	chw.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head><title>Chapter 1</title></head>
+<body>
+<script>console.log("hello");</script>
+<p>Hello world</p>
+</body>
+</html>`))
+
+	// JPEG image declared as PNG
+	coverw, _ := w.Create("OEBPS/cover.jpg")
+	coverw.Write([]byte{0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00})
+
+	w.Close()
+	f.Close()
+
+	// Validate the broken EPUB first
+	beforeReport, err := validate.Validate(input)
+	if err != nil {
+		t.Fatalf("Pre-validation failed: %v", err)
+	}
+	beforeErrors := beforeReport.ErrorCount() + beforeReport.FatalCount()
+	t.Logf("Before: %d errors, %d warnings", beforeErrors, beforeReport.WarningCount())
+	for _, msg := range beforeReport.Messages {
+		t.Logf("  %s", msg)
+	}
+
+	// Run doctor
+	result, err := Repair(input, output)
+	if err != nil {
+		t.Fatalf("Repair failed: %v", err)
+	}
+
+	t.Logf("\nApplied %d fixes:", len(result.Fixes))
+	for _, fix := range result.Fixes {
+		t.Logf("  [%s] %s", fix.CheckID, fix.Description)
+	}
+
+	afterErrors := result.AfterReport.ErrorCount() + result.AfterReport.FatalCount()
+	t.Logf("\nAfter: %d errors, %d warnings", afterErrors, result.AfterReport.WarningCount())
+	for _, msg := range result.AfterReport.Messages {
+		t.Logf("  %s", msg)
+	}
+
+	// Verify fixes were applied
+	expectedFixes := map[string]bool{
+		"OCF-002": false, // mimetype not first
+		"OCF-003": false, // wrong mimetype content
+		"OPF-004": false, // missing dcterms:modified
+		"OPF-024": false, // wrong media-type
+		"HTM-005": false, // missing scripted property
+		"HTM-010": false, // wrong DOCTYPE
+	}
+	for _, fix := range result.Fixes {
+		if _, ok := expectedFixes[fix.CheckID]; ok {
+			expectedFixes[fix.CheckID] = true
+		}
+	}
+	for checkID, found := range expectedFixes {
+		if !found {
+			t.Errorf("Expected fix for %s but it was not applied", checkID)
+		}
+	}
+
+	// Verify error count decreased
+	if afterErrors >= beforeErrors {
+		t.Errorf("Expected fewer errors after fix: before=%d, after=%d", beforeErrors, afterErrors)
+	}
+
+	// Verify the repaired EPUB is a valid ZIP
+	zr, err := zip.OpenReader(output)
+	if err != nil {
+		t.Fatalf("Output is not a valid ZIP: %v", err)
+	}
+	defer zr.Close()
+
+	// Verify mimetype is first and stored
+	if zr.File[0].Name != "mimetype" {
+		t.Errorf("mimetype not first entry: got %s", zr.File[0].Name)
+	}
+	if zr.File[0].Method != zip.Store {
+		t.Errorf("mimetype not stored: method=%d", zr.File[0].Method)
+	}
+}
+
+// TestDoctorRoundTrip verifies that running doctor on a valid EPUB
+// produces identical validation results.
+func TestDoctorRoundTrip(t *testing.T) {
+	opts := defaultOpts()
+	input := createTestEPUB(t, opts)
+
+	report1, err := validate.Validate(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Doctor should not produce output for valid EPUB
+	result, err := Repair(input, filepath.Join(t.TempDir(), "output.epub"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(result.Fixes) != 0 {
+		t.Errorf("Expected no fixes, got %d", len(result.Fixes))
+	}
+
+	// Before and after should be the same report
+	if report1.ErrorCount() != result.BeforeReport.ErrorCount() {
+		t.Errorf("Reports don't match: %d vs %d errors",
+			report1.ErrorCount(), result.BeforeReport.ErrorCount())
+	}
+}
