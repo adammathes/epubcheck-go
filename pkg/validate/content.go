@@ -63,12 +63,20 @@ func checkContentWithSkips(ep *epub.EPUB, r *report.Report, skipFiles map[string
 		// HTM-002: content should have title (WARNING)
 		checkContentHasTitle(data, fullPath, r)
 
+		// HTM-003: empty href attributes
+		checkEmptyHrefAttributes(data, fullPath, r)
+
 		// HTM-004: no obsolete elements
 		checkNoObsoleteElements(data, fullPath, r)
 
-		// HTM-011/HTM-012: DOCTYPE and namespace checks (EPUB 3 only)
+		// HTM-009: base element not allowed
+		checkNoBaseElement(data, fullPath, r)
+
+		// HTM-010/HTM-011/HTM-012: DOCTYPE and namespace checks (EPUB 3 only)
 		if ep.Package.Version >= "3.0" {
-			checkDoctype(data, fullPath, r)
+			if !checkDoctypeHTML5(data, fullPath, r) {
+				checkDoctype(data, fullPath, r)
+			}
 		}
 		checkXHTMLNamespace(data, fullPath, r)
 
@@ -76,6 +84,17 @@ func checkContentWithSkips(ep *epub.EPUB, r *report.Report, skipFiles map[string
 		if ep.Package.Version >= "3.0" {
 			checkPropertyDeclarations(ep, data, fullPath, item, r)
 		}
+
+		// HTM-015: epub:type values must be valid (EPUB 3 only)
+		if ep.Package.Version >= "3.0" {
+			checkEpubTypeValid(data, fullPath, r)
+		}
+
+		// HTM-020: no processing instructions
+		checkNoProcessingInstructions(data, fullPath, r)
+
+		// HTM-021: position:absolute warning
+		checkNoPositionAbsolute(data, fullPath, r)
 
 		// HTM-013/HTM-014: FXL viewport checks
 		if isFXL && ep.Package.Version >= "3.0" {
@@ -107,7 +126,7 @@ func checkContentWithSkips(ep *epub.EPUB, r *report.Report, skipFiles map[string
 		checkSingleBody(data, fullPath, r)
 
 		// HTM-019: html root element
-		checkHTMLRootElement(data, fullPath, r)
+		hasHTMLRoot := checkHTMLRootElement(data, fullPath, r)
 
 		// HTM-022: object data references must resolve
 		if !isNav {
@@ -118,6 +137,43 @@ func checkContentWithSkips(ep *epub.EPUB, r *report.Report, skipFiles map[string
 		if !isNav {
 			checkNoParentDirLinks(ep, data, fullPath, r)
 		}
+
+		// HTM-024: content documents must have a head element (skip if no html root)
+		if hasHTMLRoot {
+			checkContentHasHead(data, fullPath, r)
+		}
+
+		// HTM-025: embed element references must exist
+		if !isNav {
+			checkEmbedReferences(ep, data, fullPath, r)
+		}
+
+		// HTM-026: lang and xml:lang must match
+		checkLangXMLLangMatch(data, fullPath, r)
+
+		// HTM-027: video poster must exist
+		if ep.Package.Version >= "3.0" && !isNav {
+			checkVideoPosterExists(ep, data, fullPath, r)
+		}
+
+		// HTM-028: audio src must exist
+		if ep.Package.Version >= "3.0" && !isNav {
+			checkAudioSrcExists(ep, data, fullPath, r)
+		}
+
+		// HTM-030: img src must not be empty
+		checkImgSrcNotEmpty(data, fullPath, r)
+
+		// HTM-031: SSML namespace check
+		if ep.Package.Version >= "3.0" {
+			checkSSMLNamespace(data, fullPath, r)
+		}
+
+		// HTM-032: style element CSS syntax
+		checkStyleElementValid(data, fullPath, r)
+
+		// HTM-033: no RDF elements in content
+		checkNoRDFElements(data, fullPath, r)
 	}
 }
 
@@ -134,11 +190,16 @@ func checkXHTMLWellFormed(data []byte, location string, r *report.Report) bool {
 			// HTM-017: HTML entity references not valid in XHTML
 			if strings.Contains(errMsg, "invalid character entity") || strings.Contains(errMsg, "entity") {
 				r.AddWithLocation(report.Fatal, "HTM-017",
-					fmt.Sprintf("Content document is not well-formed: entity was referenced but not declared"),
+					"Content document is not well-formed: entity was referenced but not declared",
+					location)
+			} else if strings.Contains(errMsg, "attribute") {
+				// HTM-029: attribute-related XML errors (e.g., malformed SVG attributes)
+				r.AddWithLocation(report.Fatal, "HTM-001",
+					fmt.Sprintf("Content document is not well-formed XML: Attribute name is not associated with an element (%s)", errMsg),
 					location)
 			} else {
 				r.AddWithLocation(report.Fatal, "HTM-001",
-					"Content document is not well-formed XML: element not terminated by the matching end-tag",
+					fmt.Sprintf("Content document is not well-formed XML: element not terminated by the matching end-tag (%s)", errMsg),
 					location)
 			}
 			return false
@@ -681,13 +742,14 @@ func checkSingleBody(data []byte, location string, r *report.Report) {
 	}
 }
 
-// HTM-019: content document must have html as root element
-func checkHTMLRootElement(data []byte, location string, r *report.Report) {
+// HTM-019: content document must have html as root element.
+// Returns true if the root element is html.
+func checkHTMLRootElement(data []byte, location string, r *report.Report) bool {
 	decoder := xml.NewDecoder(strings.NewReader(string(data)))
 	for {
 		tok, err := decoder.Token()
 		if err != nil {
-			break
+			return false
 		}
 		se, ok := tok.(xml.StartElement)
 		if !ok {
@@ -698,8 +760,9 @@ func checkHTMLRootElement(data []byte, location string, r *report.Report) {
 			r.AddWithLocation(report.Error, "HTM-019",
 				fmt.Sprintf("Element body is not allowed here: expected element 'html' as root, but found '%s'", se.Name.Local),
 				location)
+			return false
 		}
-		break // Only check first element
+		return true
 	}
 }
 
@@ -730,6 +793,185 @@ func checkObjectReferences(ep *epub.EPUB, data []byte, fullPath string, r *repor
 							fmt.Sprintf("Referenced resource '%s' could not be found in the container", attr.Value),
 							fullPath)
 					}
+				}
+			}
+		}
+	}
+}
+
+// HTM-003: hyperlink href attributes must not be empty
+func checkEmptyHrefAttributes(data []byte, location string, r *report.Report) {
+	decoder := xml.NewDecoder(strings.NewReader(string(data)))
+	for {
+		tok, err := decoder.Token()
+		if err != nil {
+			break
+		}
+		se, ok := tok.(xml.StartElement)
+		if !ok {
+			continue
+		}
+		if se.Name.Local == "a" {
+			for _, attr := range se.Attr {
+				if attr.Name.Local == "href" && attr.Value == "" {
+					r.AddWithLocation(report.Warning, "HTM-003",
+						"Hyperlink href attribute must not be empty",
+						location)
+				}
+			}
+		}
+	}
+}
+
+// HTM-009: base element should not be used in EPUB content documents
+func checkNoBaseElement(data []byte, location string, r *report.Report) {
+	decoder := xml.NewDecoder(strings.NewReader(string(data)))
+	for {
+		tok, err := decoder.Token()
+		if err != nil {
+			break
+		}
+		if se, ok := tok.(xml.StartElement); ok {
+			if se.Name.Local == "base" {
+				r.AddWithLocation(report.Warning, "HTM-009",
+					"The 'base' element is not allowed in EPUB content documents",
+					location)
+				return
+			}
+		}
+	}
+}
+
+// HTM-010: EPUB 3 content documents must use HTML5 DOCTYPE or no DOCTYPE.
+// Returns true if a non-HTML5 DOCTYPE was detected (to skip HTM-011 which overlaps).
+func checkDoctypeHTML5(data []byte, location string, r *report.Report) bool {
+	content := string(data)
+	idx := strings.Index(strings.ToUpper(content), "<!DOCTYPE")
+	if idx == -1 {
+		return false // No DOCTYPE is fine
+	}
+	endIdx := strings.Index(content[idx:], ">")
+	if endIdx == -1 {
+		return false
+	}
+	doctype := strings.ToUpper(content[idx : idx+endIdx+1])
+	// HTML5 DOCTYPE is just <!DOCTYPE html> (case-insensitive, optionally with system)
+	// If it contains XHTML DTD identifiers, it's wrong
+	if strings.Contains(doctype, "XHTML") || strings.Contains(doctype, "DTD") {
+		r.AddWithLocation(report.Error, "HTM-010",
+			"Irregular DOCTYPE: EPUB 3 content documents must use the HTML5 DOCTYPE (<!DOCTYPE html>) or no DOCTYPE",
+			location)
+		return true
+	}
+	return false
+}
+
+// Valid epub:type values from the EPUB structural semantics vocabulary
+var validEpubTypes = map[string]bool{
+	"abstract": true, "acknowledgments": true, "afterword": true, "answer": true,
+	"answers": true, "appendix": true, "assessment": true, "assessments": true,
+	"backmatter": true, "balloon": true, "biblioentry": true, "bibliography": true,
+	"biblioref": true, "bodymatter": true, "bridgehead": true, "chapter": true,
+	"colophon": true, "concluding-sentence": true, "conclusion": true, "contributors": true,
+	"copyright-page": true, "cover": true, "covertitle": true, "credit": true,
+	"credits": true, "dedication": true, "division": true, "endnote": true,
+	"endnotes": true, "epigraph": true, "epilogue": true, "errata": true,
+	"figure": true, "fill-in-the-blank-problem": true, "footnote": true, "footnotes": true,
+	"foreword": true, "frontmatter": true, "fulltitle": true, "general-problem": true,
+	"glossary": true, "glossdef": true, "glossref": true, "glossterm": true,
+	"halftitle": true, "halftitlepage": true, "help": true, "imprimatur": true,
+	"imprint": true, "index": true, "index-editor-note": true, "index-entry": true,
+	"index-entry-list": true, "index-group": true, "index-headnotes": true,
+	"index-legend": true, "index-locator": true, "index-locator-list": true,
+	"index-locator-range": true, "index-term": true, "index-term-categories": true,
+	"index-term-category": true, "index-xref-preferred": true, "index-xref-related": true,
+	"introduction": true, "keyword": true, "keywords": true, "label": true,
+	"landmarks": true, "learning-objective": true, "learning-objectives": true,
+	"learning-outcome": true, "learning-outcomes": true, "learning-resource": true,
+	"learning-resources": true, "learning-standard": true, "learning-standards": true,
+	"list": true, "list-item": true, "loa": true, "loi": true, "lot": true, "lov": true,
+	"match-problem": true, "multiple-choice-problem": true, "noteref": true,
+	"notice": true, "ordinal": true, "other-credits": true, "page-list": true,
+	"pagebreak": true, "panel": true, "panel-group": true, "part": true,
+	"practice": true, "practices": true, "preamble": true, "preface": true,
+	"prologue": true, "pullquote": true, "qna": true, "question": true,
+	"revision-history": true, "se:short-story": true, "sound-area": true,
+	"subchapter": true, "subtitle": true, "table": true, "table-cell": true,
+	"table-row": true, "text-area": true, "tip": true, "title": true,
+	"titlepage": true, "toc": true, "toc-brief": true, "topic-sentence": true,
+	"true-false-problem": true, "volume": true, "warning": true,
+}
+
+// HTM-015: epub:type values must be valid
+func checkEpubTypeValid(data []byte, location string, r *report.Report) {
+	decoder := xml.NewDecoder(strings.NewReader(string(data)))
+	for {
+		tok, err := decoder.Token()
+		if err != nil {
+			break
+		}
+		se, ok := tok.(xml.StartElement)
+		if !ok {
+			continue
+		}
+		for _, attr := range se.Attr {
+			if attr.Name.Local == "type" && (attr.Name.Space == "http://www.idpf.org/2007/ops" || attr.Name.Space == "") {
+				for _, val := range strings.Fields(attr.Value) {
+					// Skip prefixed values (e.g., "dp:footnote") - those use custom vocabularies
+					if strings.Contains(val, ":") {
+						continue
+					}
+					if !validEpubTypes[val] {
+						r.AddWithLocation(report.Warning, "HTM-015",
+							fmt.Sprintf("epub:type value '%s' is not a recognized structural semantics value", val),
+							location)
+					}
+				}
+			}
+		}
+	}
+}
+
+// HTM-020: processing instructions should not be used in EPUB content documents
+func checkNoProcessingInstructions(data []byte, location string, r *report.Report) {
+	decoder := xml.NewDecoder(strings.NewReader(string(data)))
+	for {
+		tok, err := decoder.Token()
+		if err != nil {
+			break
+		}
+		if pi, ok := tok.(xml.ProcInst); ok {
+			// Skip the xml declaration itself
+			if pi.Target == "xml" {
+				continue
+			}
+			r.AddWithLocation(report.Warning, "HTM-020",
+				fmt.Sprintf("Processing instruction '%s' should not be used in EPUB content documents", pi.Target),
+				location)
+		}
+	}
+}
+
+// HTM-021: position:absolute in content documents may cause rendering issues
+func checkNoPositionAbsolute(data []byte, location string, r *report.Report) {
+	decoder := xml.NewDecoder(strings.NewReader(string(data)))
+	for {
+		tok, err := decoder.Token()
+		if err != nil {
+			break
+		}
+		se, ok := tok.(xml.StartElement)
+		if !ok {
+			continue
+		}
+		for _, attr := range se.Attr {
+			if attr.Name.Local == "style" {
+				if strings.Contains(strings.ToLower(attr.Value), "position") &&
+					strings.Contains(strings.ToLower(attr.Value), "absolute") {
+					r.AddWithLocation(report.Warning, "HTM-021",
+						"Use of 'position:absolute' in content documents may cause rendering issues in reading systems",
+						location)
+					return
 				}
 			}
 		}
@@ -774,6 +1016,267 @@ func checkNoParentDirLinks(ep *epub.EPUB, data []byte, fullPath string, r *repor
 				r.AddWithLocation(report.Error, "HTM-023",
 					fmt.Sprintf("Referenced resource '%s' leaks outside the container", href),
 					fullPath)
+			}
+		}
+	}
+}
+
+// HTM-024: XHTML content documents must have a head element
+func checkContentHasHead(data []byte, location string, r *report.Report) {
+	decoder := xml.NewDecoder(strings.NewReader(string(data)))
+	for {
+		tok, err := decoder.Token()
+		if err != nil {
+			break
+		}
+		if se, ok := tok.(xml.StartElement); ok {
+			if se.Name.Local == "head" {
+				return
+			}
+		}
+	}
+	r.AddWithLocation(report.Error, "HTM-024",
+		"Content document is missing required element 'head'",
+		location)
+}
+
+// HTM-025: embed element src must reference existing resource
+func checkEmbedReferences(ep *epub.EPUB, data []byte, location string, r *report.Report) {
+	decoder := xml.NewDecoder(strings.NewReader(string(data)))
+	contentDir := path.Dir(location)
+	for {
+		tok, err := decoder.Token()
+		if err != nil {
+			break
+		}
+		se, ok := tok.(xml.StartElement)
+		if !ok {
+			continue
+		}
+		if se.Name.Local == "embed" {
+			for _, attr := range se.Attr {
+				if attr.Name.Local == "src" && attr.Value != "" {
+					u, err := url.Parse(attr.Value)
+					if err != nil || u.Scheme != "" {
+						continue
+					}
+					target := resolvePath(contentDir, u.Path)
+					if _, exists := ep.Files[target]; !exists {
+						r.AddWithLocation(report.Error, "HTM-025",
+							fmt.Sprintf("Referenced resource '%s' could not be found in the container", attr.Value),
+							location)
+					}
+				}
+			}
+		}
+	}
+}
+
+// HTM-026: lang and xml:lang must have the same value when both present
+func checkLangXMLLangMatch(data []byte, location string, r *report.Report) {
+	decoder := xml.NewDecoder(strings.NewReader(string(data)))
+	for {
+		tok, err := decoder.Token()
+		if err != nil {
+			break
+		}
+		se, ok := tok.(xml.StartElement)
+		if !ok {
+			continue
+		}
+		var lang, xmlLang string
+		hasLang, hasXMLLang := false, false
+		for _, attr := range se.Attr {
+			if attr.Name.Local == "lang" && attr.Name.Space == "" {
+				lang = attr.Value
+				hasLang = true
+			}
+			if attr.Name.Local == "lang" && attr.Name.Space == "http://www.w3.org/XML/1998/namespace" {
+				xmlLang = attr.Value
+				hasXMLLang = true
+			}
+		}
+		if hasLang && hasXMLLang && !strings.EqualFold(lang, xmlLang) {
+			r.AddWithLocation(report.Error, "HTM-026",
+				fmt.Sprintf("Attributes lang and xml:lang must have the same value when both are present, but found '%s' and '%s'", lang, xmlLang),
+				location)
+			return
+		}
+	}
+}
+
+// HTM-027: video poster attribute must reference existing resource
+func checkVideoPosterExists(ep *epub.EPUB, data []byte, location string, r *report.Report) {
+	decoder := xml.NewDecoder(strings.NewReader(string(data)))
+	contentDir := path.Dir(location)
+	for {
+		tok, err := decoder.Token()
+		if err != nil {
+			break
+		}
+		se, ok := tok.(xml.StartElement)
+		if !ok {
+			continue
+		}
+		if se.Name.Local == "video" {
+			for _, attr := range se.Attr {
+				if attr.Name.Local == "poster" && attr.Value != "" {
+					u, err := url.Parse(attr.Value)
+					if err != nil || u.Scheme != "" {
+						continue
+					}
+					target := resolvePath(contentDir, u.Path)
+					if _, exists := ep.Files[target]; !exists {
+						r.AddWithLocation(report.Error, "HTM-027",
+							fmt.Sprintf("Referenced resource '%s' could not be found in the container", attr.Value),
+							location)
+					}
+				}
+			}
+		}
+	}
+}
+
+// HTM-028: audio src must reference existing resource
+func checkAudioSrcExists(ep *epub.EPUB, data []byte, location string, r *report.Report) {
+	decoder := xml.NewDecoder(strings.NewReader(string(data)))
+	contentDir := path.Dir(location)
+	for {
+		tok, err := decoder.Token()
+		if err != nil {
+			break
+		}
+		se, ok := tok.(xml.StartElement)
+		if !ok {
+			continue
+		}
+		if se.Name.Local == "audio" || se.Name.Local == "source" {
+			for _, attr := range se.Attr {
+				if attr.Name.Local == "src" && attr.Value != "" {
+					u, err := url.Parse(attr.Value)
+					if err != nil || u.Scheme != "" {
+						continue
+					}
+					target := resolvePath(contentDir, u.Path)
+					if _, exists := ep.Files[target]; !exists {
+						r.AddWithLocation(report.Error, "HTM-028",
+							fmt.Sprintf("Referenced resource '%s' could not be found in the container", attr.Value),
+							location)
+					}
+				}
+			}
+		}
+	}
+}
+
+// HTM-030: img src attribute must not be empty
+func checkImgSrcNotEmpty(data []byte, location string, r *report.Report) {
+	decoder := xml.NewDecoder(strings.NewReader(string(data)))
+	for {
+		tok, err := decoder.Token()
+		if err != nil {
+			break
+		}
+		se, ok := tok.(xml.StartElement)
+		if !ok {
+			continue
+		}
+		if se.Name.Local == "img" {
+			for _, attr := range se.Attr {
+				if attr.Name.Local == "src" && attr.Value == "" {
+					r.AddWithLocation(report.Error, "HTM-030",
+						"The value of attribute 'src' is invalid; the value must be a string with length at least 1",
+						location)
+				}
+			}
+		}
+	}
+}
+
+// HTM-031: SSML namespace must not be used
+func checkSSMLNamespace(data []byte, location string, r *report.Report) {
+	ssmlNS := "http://www.w3.org/2001/10/synthesis"
+	decoder := xml.NewDecoder(strings.NewReader(string(data)))
+	for {
+		tok, err := decoder.Token()
+		if err != nil {
+			break
+		}
+		if se, ok := tok.(xml.StartElement); ok {
+			for _, attr := range se.Attr {
+				if strings.Contains(attr.Value, ssmlNS) || attr.Name.Space == ssmlNS {
+					r.AddWithLocation(report.Error, "HTM-031",
+						"Custom attribute namespace must not include SSML namespace",
+						location)
+					return
+				}
+			}
+		}
+	}
+}
+
+// HTM-032: CSS in inline style elements must be syntactically valid
+func checkStyleElementValid(data []byte, location string, r *report.Report) {
+	decoder := xml.NewDecoder(strings.NewReader(string(data)))
+	for {
+		tok, err := decoder.Token()
+		if err != nil {
+			break
+		}
+		se, ok := tok.(xml.StartElement)
+		if !ok || se.Name.Local != "style" {
+			continue
+		}
+		// Read the style content
+		var cssContent string
+		for {
+			inner, err := decoder.Token()
+			if err != nil {
+				break
+			}
+			if cd, ok := inner.(xml.CharData); ok {
+				cssContent += string(cd)
+			}
+			if _, ok := inner.(xml.EndElement); ok {
+				break
+			}
+		}
+		// Check for basic CSS syntax errors
+		if strings.Contains(cssContent, "{") {
+			// Check for empty values (property: ;)
+			emptyVal := regexp.MustCompile(`:\s*;`)
+			if emptyVal.MatchString(cssContent) {
+				r.AddWithLocation(report.Error, "HTM-032",
+					"An error occurred while parsing the CSS in style element",
+					location)
+			}
+			// Check for missing closing braces
+			opens := strings.Count(cssContent, "{")
+			closes := strings.Count(cssContent, "}")
+			if opens != closes {
+				r.AddWithLocation(report.Error, "HTM-032",
+					"An error occurred while parsing the CSS in style element: mismatched braces",
+					location)
+			}
+		}
+	}
+}
+
+// HTM-033: RDF metadata elements should not be used in EPUB content documents
+func checkNoRDFElements(data []byte, location string, r *report.Report) {
+	rdfNS := "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+	decoder := xml.NewDecoder(strings.NewReader(string(data)))
+	for {
+		tok, err := decoder.Token()
+		if err != nil {
+			break
+		}
+		if se, ok := tok.(xml.StartElement); ok {
+			if se.Name.Space == rdfNS || se.Name.Local == "RDF" {
+				r.AddWithLocation(report.Error, "HTM-033",
+					"RDF metadata elements should not be used in EPUB content documents",
+					location)
+				return
 			}
 		}
 	}

@@ -128,10 +128,15 @@ func (ep *EPUB) ParseOPF() error {
 	ep.HasSpine = structInfo.hasSpine
 
 	p := &Package{
-		UniqueIdentifier: structInfo.uniqueIdentifier,
-		Version:          structInfo.version,
-		Dir:              structInfo.dir,
-		SpineToc:         structInfo.spineToc,
+		UniqueIdentifier:         structInfo.uniqueIdentifier,
+		Version:                  structInfo.version,
+		Dir:                      structInfo.dir,
+		Prefix:                   structInfo.prefix,
+		SpineToc:                 structInfo.spineToc,
+		PageProgressionDirection: structInfo.pageProgressionDirection,
+		HasGuide:                 structInfo.hasGuide,
+		MetaRefines:              structInfo.metaRefines,
+		ElementOrder:             structInfo.elementOrder,
 	}
 
 	// Parse metadata if present
@@ -152,6 +157,8 @@ func (ep *EPUB) ParseOPF() error {
 			p.RenditionOrientation = m.value
 		case "rendition:spread":
 			p.RenditionSpread = m.value
+		case "rendition:flow":
+			p.RenditionFlow = m.value
 		}
 	}
 	p.ModifiedCount = modifiedCount
@@ -174,16 +181,21 @@ func (ep *EPUB) ParseOPF() error {
 }
 
 type opfStructInfo struct {
-	version          string
-	uniqueIdentifier string
-	dir              string
-	hasMetadata      bool
-	hasManifest      bool
-	hasSpine         bool
-	spineToc         string
-	spineItems       []SpineItemref
-	metas            []metaInfo
-	guideRefs        []GuideReference
+	version                  string
+	uniqueIdentifier         string
+	dir                      string
+	prefix                   string
+	hasMetadata              bool
+	hasManifest              bool
+	hasSpine                 bool
+	hasGuide                 bool
+	spineToc                 string
+	pageProgressionDirection string
+	spineItems               []SpineItemref
+	metas                    []metaInfo
+	metaRefines              []MetaRefines
+	guideRefs                []GuideReference
+	elementOrder             []string
 }
 
 type metaInfo struct {
@@ -220,30 +232,43 @@ func scanOPFStructure(data []byte) (*opfStructInfo, error) {
 					info.uniqueIdentifier = attr.Value
 				case "dir":
 					info.dir = attr.Value
+				case "prefix":
+					info.prefix = attr.Value
 				}
 			}
 		case "metadata":
 			info.hasMetadata = true
+			info.elementOrder = append(info.elementOrder, "metadata")
 		case "manifest":
 			info.hasManifest = true
+			info.elementOrder = append(info.elementOrder, "manifest")
 		case "spine":
 			info.hasSpine = true
+			info.elementOrder = append(info.elementOrder, "spine")
 			for _, attr := range se.Attr {
-				if attr.Name.Local == "toc" {
+				switch attr.Name.Local {
+				case "toc":
 					info.spineToc = attr.Value
+				case "page-progression-direction":
+					info.pageProgressionDirection = attr.Value
 				}
 			}
+		case "guide":
+			info.hasGuide = true
+			info.elementOrder = append(info.elementOrder, "guide")
 		case "itemref":
-			var idref, props string
+			var idref, props, linear string
 			for _, attr := range se.Attr {
 				switch attr.Name.Local {
 				case "idref":
 					idref = attr.Value
 				case "properties":
 					props = attr.Value
+				case "linear":
+					linear = attr.Value
 				}
 			}
-			info.spineItems = append(info.spineItems, SpineItemref{IDRef: idref, Properties: props})
+			info.spineItems = append(info.spineItems, SpineItemref{IDRef: idref, Properties: props, Linear: linear})
 		case "reference":
 			var refType, refTitle, refHref string
 			for _, attr := range se.Attr {
@@ -260,10 +285,13 @@ func scanOPFStructure(data []byte) (*opfStructInfo, error) {
 				Type: refType, Title: refTitle, Href: refHref,
 			})
 		case "meta":
-			var prop, val string
+			var prop, refines, val string
 			for _, attr := range se.Attr {
-				if attr.Name.Local == "property" {
+				switch attr.Name.Local {
+				case "property":
 					prop = attr.Value
+				case "refines":
+					refines = attr.Value
 				}
 			}
 			if prop != "" {
@@ -273,6 +301,13 @@ func scanOPFStructure(data []byte) (*opfStructInfo, error) {
 					val = strings.TrimSpace(string(cd))
 				}
 				info.metas = append(info.metas, metaInfo{property: prop, value: val})
+				if refines != "" {
+					info.metaRefines = append(info.metaRefines, MetaRefines{
+						Refines:  refines,
+						Property: prop,
+						Value:    val,
+					})
+				}
 			}
 		}
 	}
@@ -318,6 +353,23 @@ func parseMetadata(data []byte) Metadata {
 				if text := readElementText(decoder); text != "" {
 					md.Languages = append(md.Languages, text)
 				}
+			case "date":
+				if text := readElementText(decoder); text != "" {
+					md.Dates = append(md.Dates, text)
+				}
+			case "source":
+				if text := readElementText(decoder); text != "" {
+					md.Sources = append(md.Sources, text)
+				}
+			case "creator":
+				role := ""
+				for _, attr := range t.Attr {
+					if attr.Name.Local == "role" {
+						role = attr.Value
+					}
+				}
+				val := readElementText(decoder)
+				md.Creators = append(md.Creators, DCCreator{Value: val, Role: role})
 			}
 		case xml.EndElement:
 			if t.Name.Local == "metadata" {
@@ -386,6 +438,8 @@ func parseManifestRaw(data []byte) ([]ManifestItem, error) {
 						item.Properties = attr.Value
 					case "fallback":
 						item.Fallback = attr.Value
+					case "media-overlay":
+						item.MediaOverlay = attr.Value
 					}
 				}
 				item.HasID = hasID

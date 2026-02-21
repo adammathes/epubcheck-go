@@ -123,6 +123,36 @@ func checkOPF(ep *epub.EPUB, r *report.Report) bool {
 	// OPF-034: package dir attribute must be valid
 	checkPackageDirValid(pkg, r)
 
+	// OPF-035: page-progression-direction must be valid
+	checkPageProgressionDirection(pkg, r)
+
+	// OPF-036: dc:date format
+	checkDCDateFormat(pkg, r)
+
+	// OPF-037: meta refines target must exist
+	checkMetaRefinesTarget(ep, r)
+
+	// OPF-038: spine linear attribute must be valid
+	checkSpineLinearValid(pkg, r)
+
+	// OPF-039: guide element deprecated in EPUB 3
+	checkEPUB3GuideDeprecated(pkg, r)
+
+	// OPF-040: UUID format validation
+	checkUUIDFormat(pkg, r)
+
+	// OPF-041: spine must contain at least one linear item
+	checkSpineHasLinear(pkg, r)
+
+	// OPF-042: rendition:flow must be valid
+	checkRenditionFlowValid(pkg, r)
+
+	// OPF-043: prefix declaration syntax
+	checkPrefixDeclaration(pkg, r)
+
+	// OPF-044: media-overlay references
+	checkMediaOverlayRef(pkg, r)
+
 	return false
 }
 
@@ -618,6 +648,198 @@ func checkCoverImageIsImage(pkg *epub.Package, r *report.Report) {
 				r.Add(report.Error, "OPF-025",
 					fmt.Sprintf("The cover-image property is not defined for media type '%s'", item.MediaType))
 			}
+		}
+	}
+}
+
+// OPF-035: page-progression-direction must be ltr, rtl, or default
+func checkPageProgressionDirection(pkg *epub.Package, r *report.Report) {
+	if pkg.Version < "3.0" || pkg.PageProgressionDirection == "" {
+		return
+	}
+	valid := map[string]bool{"ltr": true, "rtl": true, "default": true}
+	if !valid[pkg.PageProgressionDirection] {
+		r.Add(report.Error, "OPF-035",
+			fmt.Sprintf("The spine page-progression-direction value '%s' must be equal to 'ltr', 'rtl', or 'default'", pkg.PageProgressionDirection))
+	}
+}
+
+// OPF-036: dc:date should follow W3CDTF format
+var w3cdtfRe = regexp.MustCompile(`^\d{4}(-\d{2}(-\d{2}(T\d{2}:\d{2}(:\d{2})?(Z|[+-]\d{2}:\d{2})?)?)?)?$`)
+
+func checkDCDateFormat(pkg *epub.Package, r *report.Report) {
+	for _, date := range pkg.Metadata.Dates {
+		if !w3cdtfRe.MatchString(date) {
+			r.Add(report.Warning, "OPF-036",
+				fmt.Sprintf("Date value '%s' does not follow recommended syntax of W3CDTF", date))
+		}
+	}
+}
+
+// OPF-037: meta refines target must exist
+func checkMetaRefinesTarget(ep *epub.EPUB, r *report.Report) {
+	pkg := ep.Package
+	if pkg.Version < "3.0" {
+		return
+	}
+
+	// Collect all valid IDs in the package document
+	validIDs := make(map[string]bool)
+	for _, id := range pkg.Metadata.Identifiers {
+		if id.ID != "" {
+			validIDs[id.ID] = true
+		}
+	}
+	for _, item := range pkg.Manifest {
+		if item.ID != "" {
+			validIDs[item.ID] = true
+		}
+	}
+
+	for _, mr := range pkg.MetaRefines {
+		target := strings.TrimPrefix(mr.Refines, "#")
+		if target == "" {
+			continue
+		}
+		if !validIDs[target] {
+			r.Add(report.Error, "OPF-037",
+				fmt.Sprintf("Element '%s' refines missing target id '%s'", mr.Property, target))
+		}
+	}
+}
+
+// OPF-038: spine itemref linear must be "yes" or "no"
+func checkSpineLinearValid(pkg *epub.Package, r *report.Report) {
+	for _, ref := range pkg.Spine {
+		if ref.Linear == "" {
+			continue
+		}
+		if ref.Linear != "yes" && ref.Linear != "no" {
+			r.Add(report.Error, "OPF-038",
+				fmt.Sprintf("The spine itemref linear attribute value '%s' must be equal to 'yes' or 'no'", ref.Linear))
+		}
+	}
+}
+
+// OPF-039: guide element is deprecated in EPUB 3
+func checkEPUB3GuideDeprecated(pkg *epub.Package, r *report.Report) {
+	if pkg.Version < "3.0" {
+		return
+	}
+	if pkg.HasGuide {
+		r.Add(report.Warning, "OPF-039",
+			"The guide element is deprecated in EPUB 3 and should not be used")
+	}
+}
+
+// OPF-040: UUID format validation
+var uuidRe = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+
+func checkUUIDFormat(pkg *epub.Package, r *report.Report) {
+	for _, id := range pkg.Metadata.Identifiers {
+		if strings.HasPrefix(id.Value, "urn:uuid:") {
+			uuid := strings.TrimPrefix(id.Value, "urn:uuid:")
+			if !uuidRe.MatchString(uuid) {
+				r.Add(report.Warning, "OPF-040",
+					fmt.Sprintf("UUID value '%s' is invalid", uuid))
+			}
+		}
+	}
+}
+
+// OPF-041: spine must contain at least one linear resource
+func checkSpineHasLinear(pkg *epub.Package, r *report.Report) {
+	if len(pkg.Spine) == 0 {
+		return // OPF-010 already covers empty spine
+	}
+	hasLinear := false
+	allExplicitlyNonlinear := true
+	for _, ref := range pkg.Spine {
+		if ref.Linear != "no" {
+			hasLinear = true
+		}
+		if ref.Linear == "" {
+			allExplicitlyNonlinear = false
+		}
+	}
+	if !hasLinear && allExplicitlyNonlinear {
+		r.Add(report.Error, "OPF-041",
+			"The spine contains no linear resources")
+	}
+}
+
+// OPF-042: rendition:flow must be valid
+func checkRenditionFlowValid(pkg *epub.Package, r *report.Report) {
+	if pkg.Version < "3.0" || pkg.RenditionFlow == "" {
+		return
+	}
+	valid := map[string]bool{
+		"paginated": true, "scrolled-doc": true,
+		"scrolled-continuous": true, "auto": true,
+	}
+	if !valid[pkg.RenditionFlow] {
+		r.Add(report.Error, "OPF-042",
+			fmt.Sprintf("The value of property rendition:flow must be either 'paginated', 'scrolled-doc', 'scrolled-continuous', or 'auto', but was '%s'", pkg.RenditionFlow))
+	}
+}
+
+// OPF-043: prefix declaration must be well-formed
+func checkPrefixDeclaration(pkg *epub.Package, r *report.Report) {
+	if pkg.Version < "3.0" || pkg.Prefix == "" {
+		return
+	}
+	// Prefix syntax: "prefix: URI" pairs separated by whitespace
+	// Each prefix must be followed by a colon and a URI
+	parts := strings.Fields(pkg.Prefix)
+	i := 0
+	for i < len(parts) {
+		prefix := parts[i]
+		if !strings.HasSuffix(prefix, ":") {
+			r.Add(report.Error, "OPF-043",
+				fmt.Sprintf("Invalid prefix declaration: '%s' must end with ':'", prefix))
+			i++
+			continue
+		}
+		i++
+		if i >= len(parts) {
+			r.Add(report.Error, "OPF-043",
+				fmt.Sprintf("Invalid prefix declaration: prefix '%s' has no URI mapping", prefix))
+			break
+		}
+		uri := parts[i]
+		if !strings.Contains(uri, ":") && !strings.Contains(uri, "/") {
+			r.Add(report.Error, "OPF-043",
+				fmt.Sprintf("Invalid prefix declaration: '%s' is not a valid URI", uri))
+		}
+		i++
+	}
+}
+
+// OPF-044: media-overlay must reference existing SMIL manifest item
+func checkMediaOverlayRef(pkg *epub.Package, r *report.Report) {
+	if pkg.Version < "3.0" {
+		return
+	}
+	manifestByID := make(map[string]epub.ManifestItem)
+	for _, item := range pkg.Manifest {
+		if item.ID != "" {
+			manifestByID[item.ID] = item
+		}
+	}
+
+	for _, item := range pkg.Manifest {
+		if item.MediaOverlay == "" {
+			continue
+		}
+		target, ok := manifestByID[item.MediaOverlay]
+		if !ok {
+			r.Add(report.Error, "OPF-044",
+				fmt.Sprintf("Media Overlay Document referenced by '%s' could not be found: '%s'", item.Href, item.MediaOverlay))
+			continue
+		}
+		if target.MediaType != "application/smil+xml" {
+			r.Add(report.Error, "OPF-044",
+				fmt.Sprintf("Media Overlay Document referenced by '%s' has wrong type '%s': expected application/smil+xml", item.Href, target.MediaType))
 		}
 	}
 }
