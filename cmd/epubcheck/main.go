@@ -45,8 +45,18 @@ func main() {
 	// Text output to stderr
 	r.WriteText(os.Stderr)
 
-	// JSON output if requested
-	if jsonOutput != "" {
+	// JSON output: always write to stdout for tool interop, and to file if --json specified
+	if jsonOutput == "" || jsonOutput == "-" {
+		if err := r.WriteJSON(os.Stdout); err != nil {
+			fmt.Fprintf(os.Stderr, "Error writing JSON: %v\n", err)
+			os.Exit(2)
+		}
+	} else {
+		// Write to both stdout (for piping) and the specified file
+		if err := r.WriteJSON(os.Stdout); err != nil {
+			fmt.Fprintf(os.Stderr, "Error writing JSON: %v\n", err)
+			os.Exit(2)
+		}
 		if err := writeJSON(r, jsonOutput); err != nil {
 			fmt.Fprintf(os.Stderr, "Error writing JSON: %v\n", err)
 			os.Exit(2)
