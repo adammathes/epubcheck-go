@@ -10,6 +10,14 @@ A Go-based EPUB validator that checks EPUB files for compliance with standards.
 
 ## Installation
 
+### go install
+
+```bash
+go install github.com/adammathes/epubverify/cmd/epubverify@latest
+```
+
+This installs the `epubverify` binary to `$GOPATH/bin` (or `$HOME/go/bin`).
+
 ### Building from source
 
 ```bash
