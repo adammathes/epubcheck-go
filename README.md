@@ -1,12 +1,12 @@
-# ⚠️ WARNING: Vibecoded Experiment
-
-**This is an experimental project created as a vibecoded experiment. It is not production-ready and is not used anywhere yet. Use at your own risk.**
-
----
-
 # epubverify
 
 A Go-based EPUB validator that checks EPUB files for compliance with standards.
+
+## ⚠️ WARNING: Vibe-coded
+
+**This is an experimental project created with AI agents by Adam Mathes to make a non-Java epub validator.**
+
+**It is not production-ready and is not affiliated with any standards body or vendor.  It does pass the language independent [epubverify test suite](https://github.com/adammathes/epubverify-spec), but that was also vibe-coded. Use at your own risk!**
 
 ## Installation
 
@@ -69,7 +69,7 @@ make test
 
 ### Spec compliance tests
 
-Spec tests run the validator against the full [epubverify-spec](../epubverify-spec) fixture suite and compare results against curated expected output.
+Spec tests run the validator against the full [epubverify-spec](https://github.com/adammathes/epubverify-spec) fixture suite and compare results against curated expected output.
 
 ```bash
 # Point at the spec directory
