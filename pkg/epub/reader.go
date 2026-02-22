@@ -338,8 +338,14 @@ func parseMetadata(data []byte) Metadata {
 			}
 			switch t.Name.Local {
 			case "title":
+				id := ""
+				for _, attr := range t.Attr {
+					if attr.Name.Local == "id" {
+						id = attr.Value
+					}
+				}
 				text := readElementText(decoder)
-				md.Titles = append(md.Titles, text)
+				md.Titles = append(md.Titles, DCTitle{ID: id, Value: text})
 			case "identifier":
 				id := ""
 				for _, attr := range t.Attr {

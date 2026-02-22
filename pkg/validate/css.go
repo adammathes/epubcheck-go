@@ -245,34 +245,16 @@ var cssSyntaxErrorPatterns = []*regexp.Regexp{
 }
 
 func checkCSSSyntax(css string, location string, r *report.Report) {
+	// Strip comments before analyzing
+	commentRe := regexp.MustCompile(`/\*[\s\S]*?\*/`)
+	css = commentRe.ReplaceAllString(css, "")
+
 	// Check for properties without values (like "color: ;")
 	re := regexp.MustCompile(`:\s*;`)
 	if matches := re.FindAllString(css, -1); len(matches) > 0 {
 		r.AddWithLocation(report.Error, "CSS-001",
 			"An error occurred while parsing the CSS: empty property value",
 			location)
-	}
-
-	// Check for properties without colon (like "font-size }")
-	lines := strings.Split(css, "\n")
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" || strings.HasPrefix(trimmed, "/*") || strings.HasPrefix(trimmed, "@") ||
-			strings.HasPrefix(trimmed, "}") || trimmed == "{" {
-			continue
-		}
-		// Inside a rule: should have "property: value" pattern
-		if !strings.Contains(trimmed, ":") && !strings.Contains(trimmed, "{") &&
-			!strings.Contains(trimmed, "}") && !strings.HasPrefix(trimmed, ".") &&
-			!strings.HasPrefix(trimmed, "#") && !strings.HasPrefix(trimmed, "*") &&
-			len(trimmed) > 0 {
-			// Looks like a property without colon
-			if strings.ContainsAny(trimmed, "abcdefghijklmnopqrstuvwxyz-") && !strings.Contains(trimmed, ",") {
-				r.AddWithLocation(report.Error, "CSS-001",
-					fmt.Sprintf("An error occurred while parsing the CSS: '%s'", trimmed),
-					location)
-			}
-		}
 	}
 }
 

@@ -53,7 +53,7 @@ type Package struct {
 
 // Metadata holds the OPF metadata section.
 type Metadata struct {
-	Titles       []string
+	Titles       []DCTitle
 	Identifiers  []DCIdentifier
 	Languages    []string
 	Modified     string // dcterms:modified value
@@ -61,6 +61,12 @@ type Metadata struct {
 	Sources      []string
 	Creators     []DCCreator
 	Contributors []DCCreator // dc:contributor elements (same structure as dc:creator)
+}
+
+// DCTitle represents a dc:title element with optional id attribute.
+type DCTitle struct {
+	ID    string // id attribute (used as refines target in EPUB 3)
+	Value string
 }
 
 // DCCreator represents a dc:creator element with optional opf:role.

@@ -476,10 +476,53 @@ func checkMediaTypeMatches(ep *epub.EPUB, r *report.Report) {
 			if expectedType == "image/svg+xml" {
 				continue
 			}
+			// Skip equivalent MIME types for fonts, JavaScript, and audio/video
+			if mediaTypesEquivalent(item.MediaType, expectedType) {
+				continue
+			}
 			r.Add(report.Error, "OPF-024",
 				fmt.Sprintf("The file '%s' does not appear to match the media type '%s'", item.Href, item.MediaType))
 		}
 	}
+}
+
+// mediaTypesEquivalent returns true if two MIME types are functionally
+// equivalent for EPUB purposes (e.g., different font MIME types for the
+// same font format, or text/javascript vs application/javascript).
+func mediaTypesEquivalent(declared, expected string) bool {
+	// Font MIME type equivalences: older EPUBs use application/vnd.ms-opentype
+	// or application/x-font-* types for fonts that newer specs call font/otf etc.
+	fontTypes := map[string]bool{
+		"font/otf":                        true,
+		"font/ttf":                        true,
+		"application/vnd.ms-opentype":     true,
+		"application/font-sfnt":           true,
+		"application/x-font-ttf":          true,
+		"application/x-font-opentype":     true,
+		"application/x-font-truetype":     true,
+	}
+	if fontTypes[declared] && fontTypes[expected] {
+		return true
+	}
+	// JavaScript MIME type equivalences
+	jsTypes := map[string]bool{
+		"application/javascript":   true,
+		"text/javascript":          true,
+		"application/ecmascript":   true,
+		"application/x-javascript": true,
+	}
+	if jsTypes[declared] && jsTypes[expected] {
+		return true
+	}
+	// MP4 container can be audio or video
+	mp4Types := map[string]bool{
+		"audio/mp4": true,
+		"video/mp4": true,
+	}
+	if mp4Types[declared] && mp4Types[expected] {
+		return true
+	}
+	return false
 }
 
 func extensionToMediaType(ext string) string {
@@ -606,7 +649,7 @@ func checkDCIdentifierNotEmpty(pkg *epub.Package, r *report.Report) {
 // OPF-032: dc:title must not be empty
 func checkDCTitleNotEmpty(pkg *epub.Package, r *report.Report) {
 	for _, t := range pkg.Metadata.Titles {
-		if strings.TrimSpace(t) == "" {
+		if strings.TrimSpace(t.Value) == "" {
 			r.Add(report.Error, "OPF-032",
 				"Element dc:title has invalid value: must not be empty")
 		}
@@ -685,6 +728,11 @@ func checkMetaRefinesTarget(ep *epub.EPUB, r *report.Report) {
 
 	// Collect all valid IDs in the package document
 	validIDs := make(map[string]bool)
+	for _, title := range pkg.Metadata.Titles {
+		if title.ID != "" {
+			validIDs[title.ID] = true
+		}
+	}
 	for _, id := range pkg.Metadata.Identifiers {
 		if id.ID != "" {
 			validIDs[id.ID] = true

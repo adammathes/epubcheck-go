@@ -82,7 +82,7 @@ func TestParseOPF(t *testing.T) {
 		{"version", pkg.Version, "3.0"},
 		{"unique-identifier", pkg.UniqueIdentifier, "uid"},
 		{"title count", len(pkg.Metadata.Titles), 1},
-		{"title", pkg.Metadata.Titles[0], "Test Book"},
+		{"title", pkg.Metadata.Titles[0].Value, "Test Book"},
 		{"identifier count", len(pkg.Metadata.Identifiers), 1},
 		{"language count", len(pkg.Metadata.Languages), 1},
 		{"language", pkg.Metadata.Languages[0], "en"},
