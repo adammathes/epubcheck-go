@@ -99,65 +99,69 @@ done
 echo ""
 echo "Done. Downloaded: $downloaded, Skipped: $skipped, Failed: $failed"
 
-# --- IDPF EPUB 3 Samples (built from source) ---
-# These are the official EPUB 3 sample documents from IDPF/W3C.
-# They must be built from the expanded directory format using epubcheck.
-#
-# To build them:
-#   1. Clone: git clone https://github.com/IDPF/epub3-samples.git
-#   2. For each sample directory:
-#      java -jar epubcheck.jar <dir> -mode exp -save
-#   3. Copy the resulting .epub files to the samples directory
-#
-# The IDPF samples exercise exotic EPUB features not found in standard
-# novels: fixed-layout, SVG content documents, MathML, media overlays,
-# SSML pronunciation, RTL text, vertical writing, and web fonts.
-#
-# Sample list (filename|source directory|features):
-#   idpf-haruko-fxl.epub          | haruko-html-jpeg      | Fixed-layout manga
-#   idpf-cole-voyage-fxl.epub     | cole-voyage-of-life   | Fixed-layout art
-#   idpf-page-blanche-fxl.epub    | page-blanche          | Fixed-layout SVG
-#   idpf-svg-in-spine.epub        | svg-in-spine          | SVG content documents
-#   idpf-linear-algebra-mathml.epub | linear-algebra      | MathML equations
-#   idpf-moby-dick-mo.epub        | moby-dick-mo          | Media overlays (audio sync)
-#   idpf-wasteland-woff.epub      | wasteland             | WOFF web fonts
-#   idpf-arabic-rtl.epub          | regime-anticancer-arabic | Arabic RTL text
-#   idpf-georgia-pls-ssml.epub    | georgia-pls-ssml      | PLS/SSML pronunciation
-#   idpf-childrens-lit.epub       | childrens-literature   | Title refinement metadata
-#   idpf-figure-gallery.epub      | figure-gallery-bindings | EPUB bindings
-#   idpf-indexing.epub            | indexing-for-eds-and-auths-3f | Indexing, TTF fonts
-
+# --- IDPF EPUB 3 Samples (from GitHub releases) ---
+# Official EPUB 3 sample documents from IDPF/W3C. These exercise exotic
+# EPUB features: fixed-layout, SVG, MathML, media overlays, SSML, RTL, etc.
+IDPF_BASE="https://github.com/IDPF/epub3-samples/releases/download/20230704"
 IDPF_SAMPLES=(
-  "idpf-haruko-fxl.epub|haruko-html-jpeg"
-  "idpf-cole-voyage-fxl.epub|cole-voyage-of-life"
-  "idpf-page-blanche-fxl.epub|page-blanche"
-  "idpf-svg-in-spine.epub|svg-in-spine"
-  "idpf-linear-algebra-mathml.epub|linear-algebra"
-  "idpf-moby-dick-mo.epub|moby-dick-mo"
-  "idpf-wasteland-woff.epub|wasteland"
-  "idpf-arabic-rtl.epub|regime-anticancer-arabic"
-  "idpf-georgia-pls-ssml.epub|georgia-pls-ssml"
-  "idpf-childrens-lit.epub|childrens-literature"
-  "idpf-figure-gallery.epub|figure-gallery-bindings"
-  "idpf-indexing.epub|indexing-for-eds-and-auths-3f"
+  "idpf-haruko-fxl.epub|${IDPF_BASE}/haruko-html-jpeg.epub|Fixed-layout manga (IDPF)"
+  "idpf-cole-voyage-fxl.epub|${IDPF_BASE}/cole-voyage-of-life.epub|Fixed-layout art (IDPF)"
+  "idpf-page-blanche-fxl.epub|${IDPF_BASE}/page-blanche.epub|Fixed-layout SVG (IDPF)"
+  "idpf-svg-in-spine.epub|${IDPF_BASE}/svg-in-spine.epub|SVG content documents (IDPF)"
+  "idpf-linear-algebra-mathml.epub|${IDPF_BASE}/linear-algebra.epub|MathML equations (IDPF)"
+  "idpf-moby-dick-mo.epub|${IDPF_BASE}/moby-dick-mo.epub|Media overlays (IDPF)"
+  "idpf-wasteland-woff.epub|${IDPF_BASE}/wasteland-woff.epub|WOFF web fonts (IDPF)"
+  "idpf-wasteland-otf-obf.epub|${IDPF_BASE}/wasteland-otf-obf.epub|Obfuscated OTF fonts (IDPF)"
+  "idpf-arabic-rtl.epub|${IDPF_BASE}/regime-anticancer-arabic.epub|Arabic RTL text (IDPF)"
+  "idpf-georgia-pls-ssml.epub|${IDPF_BASE}/georgia-pls-ssml.epub|SSML pronunciation (IDPF)"
+  "idpf-childrens-lit.epub|${IDPF_BASE}/childrens-literature.epub|Title refinement metadata (IDPF)"
+  "idpf-figure-gallery.epub|${IDPF_BASE}/figure-gallery-bindings.epub|EPUB bindings (IDPF)"
+  "idpf-indexing.epub|${IDPF_BASE}/indexing-for-eds-and-auths-3f.epub|Indexing, TTF fonts (IDPF)"
+  "idpf-israelsailing.epub|${IDPF_BASE}/israelsailing.epub|Hebrew RTL content (IDPF)"
+  "idpf-hefty-water.epub|${IDPF_BASE}/hefty-water.epub|Ultra-minimal EPUB (IDPF)"
 )
 
-idpf_present=0
-idpf_missing=0
-for entry in "${IDPF_SAMPLES[@]}"; do
-  IFS='|' read -r filename srcdir <<< "$entry"
-  if [[ -f "$SAMPLES_DIR/$filename" ]]; then
-    idpf_present=$((idpf_present + 1))
-  else
-    idpf_missing=$((idpf_missing + 1))
-  fi
-done
+# --- DAISY Accessibility Tests ---
+DAISY_BASE="https://github.com/daisy/epub-accessibility-tests/releases/download/fundamental-2.0"
+DAISY_SAMPLES=(
+  "daisy-basic-functionality.epub|${DAISY_BASE}/Fundamental-Accessibility-Tests-Basic-Functionality-v2.0.0.epub|Accessibility metadata (DAISY)"
+  "daisy-non-visual-reading.epub|${DAISY_BASE}/Fundamental-Accessibility-Tests-Non-Visual-Reading-v2.0.0.epub|Non-visual reading tests (DAISY)"
+)
 
-if [[ $idpf_missing -gt 0 ]]; then
-  echo ""
-  echo "NOTE: $idpf_missing IDPF sample(s) not found. These must be built from source."
-  echo "      See comments in this script for build instructions."
-fi
+# --- Minimal EPUB test files (bmaupin/epub-samples) ---
+BM_BASE="https://github.com/bmaupin/epub-samples/releases/download/v0.3"
+BM_SAMPLES=(
+  "bm-minimal-v3.epub|${BM_BASE}/minimal-v3.epub|Minimal valid EPUB 3 (2KB)"
+  "bm-basic-v3plus2.epub|${BM_BASE}/basic-v3plus2.epub|Basic EPUB 3+2 hybrid"
+)
+
+for extra_array in IDPF_SAMPLES DAISY_SAMPLES BM_SAMPLES; do
+  eval 'entries=("${'$extra_array'[@]}")'
+  for entry in "${entries[@]}"; do
+    IFS='|' read -r filename url description <<< "$entry"
+    dest="$SAMPLES_DIR/$filename"
+
+    if [[ -f "$dest" && "$FORCE" != "--force" ]]; then
+      echo "SKIP  $filename (already exists)"
+      skipped=$((skipped + 1))
+      continue
+    fi
+
+    echo "GET   $filename - $description"
+    curl -L -s -o "$dest" "$url"
+
+    if file "$dest" | grep -q "EPUB\|Zip"; then
+      echo "  OK  $(du -h "$dest" | cut -f1)"
+      downloaded=$((downloaded + 1))
+    else
+      echo "  FAIL  Downloaded file is not a valid EPUB ($(file -b "$dest"))"
+      rm -f "$dest"
+      failed=$((failed + 1))
+    fi
+
+    sleep 1
+  done
+done
 
 echo ""
 echo "Samples directory: $SAMPLES_DIR"

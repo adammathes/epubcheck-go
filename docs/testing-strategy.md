@@ -19,24 +19,21 @@ implementation.
 # 1. Build epubverify
 make build
 
-# 2. Download sample EPUBs (30 public domain books)
+# 2. Download sample EPUBs (49 from Gutenberg, Feedbooks, IDPF, DAISY, etc.)
 ./test/realworld/download-samples.sh
 
-# 3. (Optional) Build IDPF samples — requires epubcheck JAR and the
-#    IDPF epub3-samples repo (see "IDPF Samples" below)
-
-# 4. Run the Go integration tests
+# 3. Run the Go integration tests
 make realworld-test
 
-# 5. (Optional) Compare side-by-side with epubcheck (requires Java + epubcheck JAR)
+# 4. (Optional) Compare side-by-side with epubcheck (requires Java + epubcheck JAR)
 EPUBCHECK_JAR=/path/to/epubcheck.jar make realworld-compare
 ```
 
 ## Sample Corpus
 
-The corpus consists of 42 EPUBs from four sources: Project Gutenberg,
-Feedbooks, and the IDPF epub3-samples repository. 36 are valid, 6 are
-known-invalid (both tools agree).
+The corpus consists of 49 EPUBs from five sources: Project Gutenberg,
+Feedbooks, IDPF epub3-samples, DAISY accessibility tests, and
+bmaupin/epub-samples. 43 are valid, 6 are known-invalid (both tools agree).
 
 ### Valid Samples — Project Gutenberg (24)
 
@@ -67,26 +64,49 @@ known-invalid (both tools agree).
 | `pg76-twain-huck-finn-epub2.epub` | Huckleberry Finn | **EPUB 2** |
 | `pg1232-prince-epub2.epub` | The Prince | **EPUB 2** |
 
-### Valid Samples — IDPF epub3-samples (12)
+### Valid Samples — IDPF epub3-samples (15)
 
-Built from the [IDPF epub3-samples](https://github.com/IDPF/epub3-samples)
-repository. These exercise exotic EPUB 3 features not found in standard
-novels.
+From the [IDPF epub3-samples](https://github.com/IDPF/epub3-samples)
+GitHub releases. These exercise exotic EPUB 3 features not found in
+standard novels.
 
-| File | Source dir | Features |
-|------|-----------|----------|
+| File | Source | Features |
+|------|--------|----------|
 | `idpf-haruko-fxl.epub` | haruko-html-jpeg | **Fixed-layout** manga, per-spine rendition overrides |
 | `idpf-cole-voyage-fxl.epub` | cole-voyage-of-life | **Fixed-layout** art gallery |
 | `idpf-page-blanche-fxl.epub` | page-blanche | **Fixed-layout** with SVG |
 | `idpf-svg-in-spine.epub` | svg-in-spine | **SVG content documents** in spine |
 | `idpf-linear-algebra-mathml.epub` | linear-algebra | **MathML** equations |
 | `idpf-moby-dick-mo.epub` | moby-dick-mo | **Media overlays** (audio sync), multiple font types |
-| `idpf-wasteland-woff.epub` | wasteland | **WOFF web fonts**, CSS @import |
+| `idpf-wasteland-woff.epub` | wasteland-woff | **WOFF web fonts**, CSS @import |
+| `idpf-wasteland-otf-obf.epub` | wasteland-otf-obf | **Obfuscated OTF fonts** |
 | `idpf-arabic-rtl.epub` | regime-anticancer-arabic | **Arabic RTL** text, `alternate-script` metadata |
 | `idpf-georgia-pls-ssml.epub` | georgia-pls-ssml | **SSML pronunciation**, PLS lexicons |
 | `idpf-childrens-lit.epub` | childrens-literature | Title refinement metadata (`title-type`, `display-seq`) |
 | `idpf-figure-gallery.epub` | figure-gallery-bindings | EPUB **bindings**, custom media types |
 | `idpf-indexing.epub` | indexing-for-eds-and-auths-3f | Book indexing, TTF fonts, page templates |
+| `idpf-israelsailing.epub` | israelsailing | **Hebrew RTL** content |
+| `idpf-hefty-water.epub` | hefty-water | **Ultra-minimal** EPUB (4 KB) |
+
+### Valid Samples — DAISY Accessibility Tests (2)
+
+From [DAISY epub-accessibility-tests](https://github.com/daisy/epub-accessibility-tests)
+GitHub releases. Rich accessibility metadata.
+
+| File | Features |
+|------|----------|
+| `daisy-basic-functionality.epub` | Accessibility metadata, WCAG conformance |
+| `daisy-non-visual-reading.epub` | Screen reader testing, alt text |
+
+### Valid Samples — bmaupin/epub-samples (2)
+
+From [bmaupin/epub-samples](https://github.com/bmaupin/epub-samples)
+GitHub releases. Minimal EPUBs for edge-case testing.
+
+| File | Features |
+|------|----------|
+| `bm-minimal-v3.epub` | **Minimal valid EPUB 3** (2 KB) |
+| `bm-basic-v3plus2.epub` | **EPUB 3+2 hybrid** |
 
 ### Known-Invalid Samples (6 — both tools report errors)
 
@@ -104,24 +124,6 @@ All samples are public domain and freely available. The download script
 1-second delay between requests.
 
 Sample `.epub` files are git-ignored — they must be downloaded/built locally.
-
-## IDPF Samples
-
-The IDPF samples require building from expanded directory format:
-
-```bash
-# 1. Clone the IDPF epub3-samples repository
-git clone https://github.com/IDPF/epub3-samples.git
-
-# 2. Build individual samples using epubcheck in expanded mode
-java -jar epubcheck.jar epub3-samples/30/haruko-html-jpeg -mode exp -save
-
-# 3. Copy the resulting .epub to test/realworld/samples/
-cp epub3-samples/30/haruko-html-jpeg.epub test/realworld/samples/idpf-haruko-fxl.epub
-```
-
-See the `IDPF_SAMPLES` array in `download-samples.sh` for the complete
-mapping of filenames to source directories.
 
 ## Test Layers
 
@@ -194,7 +196,12 @@ To expand the corpus:
   URL pattern: `https://www.feedbooks.com/book/{id}.epub`.
 - **[IDPF epub3-samples](https://github.com/IDPF/epub3-samples)** —
   Official EPUB 3 sample documents with exotic features (FXL, SVG,
-  MathML, media overlays, SSML). Must be built from source.
+  MathML, media overlays, SSML). Pre-built EPUBs available as
+  [GitHub releases](https://github.com/IDPF/epub3-samples/releases).
+- **[DAISY accessibility tests](https://github.com/daisy/epub-accessibility-tests)** —
+  EPUBs with rich accessibility metadata. Available as GitHub releases.
+- **[bmaupin/epub-samples](https://github.com/bmaupin/epub-samples)** —
+  Minimal EPUBs validated with epubcheck. Available as GitHub releases.
 - **[Standard Ebooks](https://standardebooks.org/)** — High-quality
   EPUB 3. Note: programmatic downloads are currently blocked.
 - **[Open Textbook Library](https://open.umn.edu/opentextbooks/)** —
@@ -265,9 +272,19 @@ bindings, and custom media types. These exposed 7 new false positives:
 
 After all fixes: **42/42 samples match epubcheck's validity verdict.**
 
+### Round 5 (expanded to 49 EPUBs: +7 from IDPF, DAISY, bmaupin)
+
+Added more IDPF samples (obfuscated fonts, Hebrew RTL, ultra-minimal),
+DAISY accessibility test EPUBs, and minimal EPUB test files. Two
+additional IDPF/ReadBeyond samples were excluded because they require
+HTML5 schema validation (RSC-005) which we don't implement.
+
+No new bugs found. **49/49 samples match epubcheck's validity verdict.**
+
 ## Future Work
 
 - **Add Standard Ebooks samples** — currently blocked by their anti-bot
   measures. Could build from their GitHub source repos.
-- **Add audio/video EPUB samples** — rare in public domain; may need to
-  construct synthetic test EPUBs.
+- **HTML5 schema validation (RSC-005)** — some EPUBs (e.g.,
+  `cc-shared-culture.epub`) have HTML5 schema errors that epubcheck flags
+  but we don't detect. This would require integrating an HTML5 validator.
