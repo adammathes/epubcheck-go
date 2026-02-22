@@ -66,6 +66,12 @@ func checkMedia(ep *epub.EPUB, r *report.Report) {
 		return
 	}
 
+	// Build set of spine item IDs for MED-004 check
+	spineItemIDs := make(map[string]bool)
+	for _, ref := range ep.Package.Spine {
+		spineItemIDs[ref.IDRef] = true
+	}
+
 	for _, item := range ep.Package.Manifest {
 		if item.Href == "\x00MISSING" || item.MediaType == "\x00MISSING" {
 			continue
@@ -99,9 +105,11 @@ func checkMedia(ep *epub.EPUB, r *report.Report) {
 		}
 
 		// MED-004/MED-005: foreign resources must have fallback
+		// Only flag spine items — non-spine foreign resources (page templates,
+		// custom XML data, etc.) don't require fallbacks per the EPUB spec.
 		// Skip image/webp and video/* - epubcheck 5.3.0 does not flag these
 		if ep.Package.Version >= "3.0" && !coreMediaTypes[item.MediaType] && item.MediaType != "image/webp" &&
-			!strings.HasPrefix(item.MediaType, "video/") && item.Fallback == "" {
+			!strings.HasPrefix(item.MediaType, "video/") && item.Fallback == "" && spineItemIDs[item.ID] {
 			r.Add(report.Error, foreignResourceCheckID(item.MediaType),
 				fmt.Sprintf("Fallback must be provided for foreign resources: '%s' has media type '%s'", item.Href, item.MediaType))
 		}

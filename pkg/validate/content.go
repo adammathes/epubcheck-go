@@ -30,6 +30,12 @@ func checkContentWithSkips(ep *epub.EPUB, r *report.Report, skipFiles map[string
 
 	isFXL := ep.Package.RenditionLayout == "pre-paginated"
 
+	// Build map of manifest item ID -> spine itemref properties for rendition overrides
+	spineProps := make(map[string]string)
+	for _, ref := range ep.Package.Spine {
+		spineProps[ref.IDRef] = ref.Properties
+	}
+
 	for _, item := range ep.Package.Manifest {
 		if item.Href == "\x00MISSING" {
 			continue
@@ -97,9 +103,19 @@ func checkContentWithSkips(ep *epub.EPUB, r *report.Report, skipFiles map[string
 		checkNoPositionAbsolute(data, fullPath, r)
 
 		// HTM-013/HTM-014: FXL viewport checks
-		if isFXL && ep.Package.Version >= "3.0" {
+		if ep.Package.Version >= "3.0" {
+			// Determine if this specific item is fixed-layout, considering
+			// per-spine-item rendition overrides
+			itemIsFXL := isFXL
+			if props, ok := spineProps[item.ID]; ok {
+				if hasProperty(props, "rendition:layout-reflowable") {
+					itemIsFXL = false
+				} else if hasProperty(props, "rendition:layout-pre-paginated") {
+					itemIsFXL = true
+				}
+			}
 			// Skip nav document from FXL viewport checks
-			if !hasProperty(item.Properties, "nav") {
+			if itemIsFXL && !hasProperty(item.Properties, "nav") {
 				checkFXLViewport(data, fullPath, r)
 			}
 		}
@@ -164,10 +180,10 @@ func checkContentWithSkips(ep *epub.EPUB, r *report.Report, skipFiles map[string
 		// HTM-030: img src must not be empty
 		checkImgSrcNotEmpty(data, fullPath, r)
 
-		// HTM-031: SSML namespace check
-		if ep.Package.Version >= "3.0" {
-			checkSSMLNamespace(data, fullPath, r)
-		}
+		// HTM-031: SSML namespace check — SSML attributes (ssml:ph, ssml:alphabet)
+		// are explicitly permitted in EPUB 3 for TTS pronunciation, so this
+		// check is disabled.
+		// checkSSMLNamespace(data, fullPath, r)
 
 		// HTM-032: style element CSS syntax
 		checkStyleElementValid(data, fullPath, r)
@@ -922,7 +938,7 @@ func checkEpubTypeValid(data []byte, location string, r *report.Report) {
 						continue
 					}
 					if !validEpubTypes[val] {
-						r.AddWithLocation(report.Warning, "HTM-015",
+						r.AddWithLocation(report.Info, "HTM-015",
 							fmt.Sprintf("epub:type value '%s' is not a recognized structural semantics value", val),
 							location)
 					}
@@ -945,8 +961,8 @@ func checkNoProcessingInstructions(data []byte, location string, r *report.Repor
 			if pi.Target == "xml" {
 				continue
 			}
-			r.AddWithLocation(report.Warning, "HTM-020",
-				fmt.Sprintf("Processing instruction '%s' should not be used in EPUB content documents", pi.Target),
+			r.AddWithLocation(report.Info, "HTM-020",
+				fmt.Sprintf("Processing instruction '%s' found in EPUB content document", pi.Target),
 				location)
 		}
 	}

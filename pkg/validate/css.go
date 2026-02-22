@@ -180,18 +180,36 @@ func checkCSSValidProperties(css string, location string, r *report.Report) {
 	commentRe := regexp.MustCompile(`/\*[\s\S]*?\*/`)
 	css = commentRe.ReplaceAllString(css, "")
 
-	// Extract property names from declarations (property: value;)
-	propRe := regexp.MustCompile(`(?m)^\s*([\w-]+)\s*:`)
-	for _, match := range propRe.FindAllStringSubmatch(css, -1) {
-		prop := strings.TrimSpace(match[1])
-		if strings.HasPrefix(prop, "-") {
-			// Allow vendor prefixes we don't know
-			continue
+	// Extract property declarations only from inside rule blocks.
+	// We track brace depth to skip selectors (outside blocks).
+	inBlock := 0
+	propRe := regexp.MustCompile(`^\s*([\w-]+)\s*:`)
+	for _, line := range strings.Split(css, "\n") {
+		trimmed := strings.TrimSpace(line)
+		// Count braces to track whether we're inside a rule block
+		for _, ch := range trimmed {
+			if ch == '{' {
+				inBlock++
+			} else if ch == '}' {
+				if inBlock > 0 {
+					inBlock--
+				}
+			}
 		}
-		if !knownCSSProperties[prop] {
-			r.AddWithLocation(report.Warning, "CSS-002",
-				fmt.Sprintf("CSS property '%s' is not a recognized property name", prop),
-				location)
+		// Only look for properties when inside a block and the line
+		// doesn't contain a brace (selector lines like "a:hover {")
+		if inBlock > 0 && !strings.ContainsAny(trimmed, "{}") && trimmed != "" {
+			if match := propRe.FindStringSubmatch(line); match != nil {
+				prop := strings.TrimSpace(match[1])
+				if strings.HasPrefix(prop, "-") {
+					continue
+				}
+				if !knownCSSProperties[prop] {
+					r.AddWithLocation(report.Warning, "CSS-002",
+						fmt.Sprintf("CSS property '%s' is not a recognized property name", prop),
+						location)
+				}
+			}
 		}
 	}
 }
@@ -227,34 +245,16 @@ var cssSyntaxErrorPatterns = []*regexp.Regexp{
 }
 
 func checkCSSSyntax(css string, location string, r *report.Report) {
+	// Strip comments before analyzing
+	commentRe := regexp.MustCompile(`/\*[\s\S]*?\*/`)
+	css = commentRe.ReplaceAllString(css, "")
+
 	// Check for properties without values (like "color: ;")
 	re := regexp.MustCompile(`:\s*;`)
 	if matches := re.FindAllString(css, -1); len(matches) > 0 {
 		r.AddWithLocation(report.Error, "CSS-001",
 			"An error occurred while parsing the CSS: empty property value",
 			location)
-	}
-
-	// Check for properties without colon (like "font-size }")
-	lines := strings.Split(css, "\n")
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" || strings.HasPrefix(trimmed, "/*") || strings.HasPrefix(trimmed, "@") ||
-			strings.HasPrefix(trimmed, "}") || trimmed == "{" {
-			continue
-		}
-		// Inside a rule: should have "property: value" pattern
-		if !strings.Contains(trimmed, ":") && !strings.Contains(trimmed, "{") &&
-			!strings.Contains(trimmed, "}") && !strings.HasPrefix(trimmed, ".") &&
-			!strings.HasPrefix(trimmed, "#") && !strings.HasPrefix(trimmed, "*") &&
-			len(trimmed) > 0 {
-			// Looks like a property without colon
-			if strings.ContainsAny(trimmed, "abcdefghijklmnopqrstuvwxyz-") && !strings.Contains(trimmed, ",") {
-				r.AddWithLocation(report.Error, "CSS-001",
-					fmt.Sprintf("An error occurred while parsing the CSS: '%s'", trimmed),
-					location)
-			}
-		}
 	}
 }
 
